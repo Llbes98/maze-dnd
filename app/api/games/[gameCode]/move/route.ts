@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { isAdjacent } from "@/lib/game-utils";
+import { isWall, normalizeWalls } from "@/lib/maze-visibility";
 
 type Participant = {
   id: string;
@@ -22,10 +23,10 @@ export async function POST(
     const toY = Number(body.toY);
 
     const { data: game, error: gameError } = await supabaseAdmin
-      .from("games")
-      .select("id, width, height, status, current_turn_index")
-      .eq("code", gameCode)
-      .maybeSingle();
+        .from("games")
+        .select("id, width, height, status, current_turn_index, map_data")
+        .eq("code", gameCode)
+        .maybeSingle();
 
     if (gameError || !game) {
       return NextResponse.json({ error: "Game not found." }, { status: 404 });
@@ -71,6 +72,12 @@ export async function POST(
 
     if (activeParticipant.remaining_moves <= 0) {
       return NextResponse.json({ error: "No movement left." }, { status: 400 });
+    }
+
+    const walls = normalizeWalls(game.map_data?.walls);
+    
+    if (isWall(toX, toY, walls)) {
+    return NextResponse.json({ error: "That square is blocked by a wall." }, { status: 400 });
     }
 
     const { data: occupied } = await supabaseAdmin

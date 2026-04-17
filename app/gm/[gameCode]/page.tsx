@@ -21,6 +21,7 @@ type GameState = {
     status: "setup" | "active" | "finished";
     move_points_per_turn: number;
   };
+  walls: { x: number; y: number }[];
   participants: Participant[];
   activeParticipantId: string | null;
 };
@@ -31,7 +32,32 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
   const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [turnOrderDirty, setTurnOrderDirty] = useState(false);
+  const [editMode, setEditMode] = useState<"assign" | "walls">("assign");
   
+  function isWallCell(x: number, y: number) {
+    return state?.walls.some((wall) => wall.x === x && wall.y === y) ?? false;
+}
+
+    async function toggleWall(x: number, y: number) {
+        if (!gameCode) return;
+
+        const res = await fetch(`/api/games/${gameCode}/toggle-wall`, {
+            method: "POST",
+            headers: {
+            "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ x, y }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            setMessage(data.error || "Could not toggle wall.");
+            return;
+        }
+
+        setMessage("Wall updated.");
+        await loadState();
+    }
 
   useEffect(() => {
     params.then((p) => setGameCode(p.gameCode));
@@ -213,6 +239,21 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
             </button>
           </div>
 
+        <div className="mt-4 flex gap-4">
+            <button
+                onClick={() => setEditMode("assign")}
+                className={`rounded-xl px-4 py-2 ${editMode === "assign" ? "bg-stone-800 text-white" : "bg-stone-200"}`}
+            >
+                Assign positions
+            </button>
+            <button
+                onClick={() => setEditMode("walls")}
+                className={`rounded-xl px-4 py-2 ${editMode === "walls" ? "bg-stone-800 text-white" : "bg-stone-200"}`}
+            >
+                Edit walls
+            </button>
+        </div>
+
           {message && <p className="mt-4 text-sm text-stone-700">{message}</p>}
         </aside>
 
@@ -225,27 +266,36 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
             }}
           >
             {Array.from({ length: state.game.width * state.game.height }).map((_, index) => {
-              const x = index % state.game.width;
-              const y = Math.floor(index / state.game.width);
-              const occupant = state.participants.find((p) => p.x === x && p.y === y);
-              const isActive = occupant?.id === state.activeParticipantId;
+                const x = index % state.game.width;
+                const y = Math.floor(index / state.game.width);
+                const occupant = state.participants.find((p) => p.x === x && p.y === y);
+                const wall = isWallCell(x, y);
+                const isActive = occupant?.id === state.activeParticipantId;
 
-              return (
-                <button
-                  key={`${x}-${y}`}
-                  onClick={() => assignPosition(x, y)}
-                  className={`aspect-square rounded-md border text-xs font-bold ${
-                    occupant
-                      ? isActive
-                        ? "bg-emerald-300 border-emerald-700"
-                        : "bg-stone-300 border-stone-600"
-                      : "bg-amber-50 border-stone-300 hover:bg-amber-100"
-                  }`}
-                  title={`${x},${y}`}
-                >
-                  {occupant ? occupant.name.slice(0, 2).toUpperCase() : ""}
-                </button>
-              );
+                return (
+                    <button
+                    key={`${x}-${y}`}
+                    onClick={() => {
+                        if (editMode === "walls") {
+                        void toggleWall(x, y);
+                        } else {
+                        void assignPosition(x, y);
+                        }
+                    }}
+                    className={`aspect-square rounded-md border text-xs font-bold ${
+                        wall
+                        ? "bg-stone-700 border-stone-900 text-stone-100"
+                        : occupant
+                        ? isActive
+                            ? "bg-emerald-300 border-emerald-700"
+                            : "bg-stone-300 border-stone-600"
+                        : "bg-amber-50 border-stone-300 hover:bg-amber-100"
+                    }`}
+                    title={`${x},${y}`}
+                    >
+                    {wall ? "■" : occupant ? occupant.name.slice(0, 2).toUpperCase() : ""}
+                    </button>
+                );
             })}
           </div>
         </section>

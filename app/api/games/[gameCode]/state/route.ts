@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { normalizeWalls } from "@/lib/maze-visibility";
 
 type Participant = {
   id: string;
@@ -19,15 +20,15 @@ export async function GET(
     const { gameCode } = await params;
 
     const { data: game, error: gameError } = await supabaseAdmin
-      .from("games")
-      .select("id, code, name, width, height, move_points_per_turn, status, current_turn_index")
-      .eq("code", gameCode)
-      .maybeSingle();
+        .from("games")
+        .select("id, code, name, width, height, move_points_per_turn, status, current_turn_index, map_data")
+        .eq("code", gameCode)
+        .maybeSingle();
 
     if (gameError || !game) {
       return NextResponse.json({ error: "Game not found." }, { status: 404 });
     }
-
+    
     const { data: participants, error: participantsError } = await supabaseAdmin
       .from("participants")
       .select("id, name, kind, x, y, turn_order, remaining_moves")
@@ -43,12 +44,16 @@ export async function GET(
     const activeParticipant =
       ordered.filter((p) => p.turn_order !== null)[game.current_turn_index] ?? null;
 
+    const walls = normalizeWalls(game.map_data?.walls);
+
     return NextResponse.json({
-      game,
-      participants: ordered,
-      activeParticipantId: activeParticipant?.id ?? null,
+        game,
+        walls,
+        participants: ordered,
+        activeParticipantId: activeParticipant?.id ?? null,
     });
   } catch {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
   }
+
 }

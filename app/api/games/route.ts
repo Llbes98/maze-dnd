@@ -48,7 +48,24 @@ export async function POST(request: Request) {
       code = generateGameCode();
     }
 
-    return NextResponse.json({ error: "Could not create a unique game code." }, { status: 500 });
+    const { data, error } = await supabaseAdmin
+  .from("games")
+  .insert({
+    code,
+    name,
+    width,
+    height,
+    move_points_per_turn: movePointsPerTurn,
+    map_data: { walls: [] },
+  })
+  .select("code")
+  .single();
+
+    if (error) {
+      return NextResponse.json({ error: "Could not create a unique game code." }, { status: 500 });
+    }
+
+    return NextResponse.json(data);
   } catch {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
   }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { cellKey, getVisibleCellKeys } from "@/lib/maze-visibility";
 
 type Participant = {
   id: string;
@@ -20,6 +21,7 @@ type GameState = {
     height: number;
     status: "setup" | "active" | "finished";
   };
+  walls: { x: number; y: number }[];
   participants: Participant[];
   activeParticipantId: string | null;
 };
@@ -141,29 +143,48 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     return <main className="min-h-screen p-8">Loading...</main>;
   }
 
-  const isMyTurn = state.activeParticipantId === me.id;
+  const currentState = state;
+  const currentMe = me;
+
+  const isMyTurn = currentState.activeParticipantId === currentMe.id;
+
   const adjacentTargets =
-    me.x === null || me.y === null
-      ? []
-      : [
-          { x: me.x + 1, y: me.y },
-          { x: me.x - 1, y: me.y },
-          { x: me.x, y: me.y + 1 },
-          { x: me.x, y: me.y - 1 },
+    currentMe.x === null || currentMe.y === null
+        ? []
+        : [
+            { x: currentMe.x + 1, y: currentMe.y },
+            { x: currentMe.x - 1, y: currentMe.y },
+            { x: currentMe.x, y: currentMe.y + 1 },
+            { x: currentMe.x, y: currentMe.y - 1 },
         ].filter(
-          (cell) =>
+            (cell) =>
             cell.x >= 0 &&
             cell.y >= 0 &&
-            cell.x < state.game.width &&
-            cell.y < state.game.height
+            cell.x < currentState.game.width &&
+            cell.y < currentState.game.height
         );
+
+  const visibleCells =
+    currentMe.x !== null && currentMe.y !== null
+        ? getVisibleCellKeys(
+            currentMe.x,
+            currentMe.y,
+            currentState.game.width,
+            currentState.game.height,
+            currentState.walls
+        )
+        : new Set<string>();
+
+  function isWallCell(x: number, y: number) {
+    return currentState.walls.some((wall) => wall.x === x && wall.y === y);
+  }
 
   return (
     <main className="min-h-screen bg-amber-50 text-stone-900 p-8">
       <div className="mx-auto max-w-6xl grid gap-6 lg:grid-cols-[280px_1fr]">
         <aside className="rounded-3xl border-4 border-amber-900/20 bg-white/70 p-6">
           <h1 className="text-3xl font-bold mb-2">{me.name}</h1>
-          <p className="text-stone-700 mb-2">{state.game.name}</p>
+          <p className="text-stone-700 mb-2">{currentState.game.name}</p>
           <p className="text-stone-700 mb-4">
             {me.x === null ? "Waiting for GM position..." : `Position: (${me.x}, ${me.y})`}
           </p>
@@ -187,34 +208,44 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
           <div
             className="grid gap-1"
             style={{
-              gridTemplateColumns: `repeat(${state.game.width}, minmax(0, 1fr))`,
+              gridTemplateColumns: `repeat(${currentState.game.width}, minmax(0, 1fr))`,
             }}
           >
-            {Array.from({ length: state.game.width * state.game.height }).map((_, index) => {
-              const x = index % state.game.width;
-              const y = Math.floor(index / state.game.width);
-              const occupant = state.participants.find((p) => p.x === x && p.y === y);
-              const canMoveHere =
-                isMyTurn && adjacentTargets.some((cell) => cell.x === x && cell.y === y);
+            {Array.from({ length: currentState.game.width * currentState.game.height }).map((_, index) => {
+                const x = index % currentState.game.width;
+                const y = Math.floor(index / currentState.game.width);
+                const key = cellKey(x, y);
+                const visible = visibleCells.has(key);
+                const occupant = visible ? currentState.participants.find((p) => p.x === x && p.y === y) : null;
+                const wall = visible && isWallCell(x, y);
+                const canMoveHere =
+                    visible &&
+                    isMyTurn &&
+                    !wall &&
+                    adjacentTargets.some((cell) => cell.x === x && cell.y === y);
 
-              return (
-                <button
-                  key={`${x}-${y}`}
-                  onClick={() => canMoveHere && move(x, y)}
-                  disabled={!canMoveHere}
-                  className={`aspect-square rounded-md border text-xs font-bold ${
-                    occupant?.id === me.id
-                      ? "bg-blue-300 border-blue-700"
-                      : occupant
-                      ? "bg-stone-300 border-stone-600"
-                      : canMoveHere
-                      ? "bg-emerald-100 border-emerald-500 hover:bg-emerald-200"
-                      : "bg-amber-50 border-stone-300"
-                  }`}
-                >
-                  {occupant?.id === me.id ? "ME" : occupant ? occupant.name.slice(0, 2).toUpperCase() : ""}
-                </button>
-              );
+                return (
+                    <button
+                    key={`${x}-${y}`}
+                    onClick={() => canMoveHere && move(x, y)}
+                    disabled={!canMoveHere}
+                    className={`aspect-square rounded-md border text-xs font-bold ${
+                        !visible
+                        ? "bg-stone-900 border-stone-950 text-transparent"
+                        : wall
+                        ? "bg-stone-700 border-stone-900 text-stone-100"
+                        : occupant?.id === me.id
+                        ? "bg-blue-300 border-blue-700"
+                        : occupant
+                        ? "bg-stone-300 border-stone-600"
+                        : canMoveHere
+                        ? "bg-emerald-100 border-emerald-500 hover:bg-emerald-200"
+                        : "bg-amber-50 border-stone-300"
+                    }`}
+                    >
+                    {!visible ? "" : wall ? "■" : occupant?.id === me.id ? "ME" : occupant ? occupant.name.slice(0, 2).toUpperCase() : ""}
+                    </button>
+                );
             })}
           </div>
         </section>
