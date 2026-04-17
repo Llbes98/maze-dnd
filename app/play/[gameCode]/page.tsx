@@ -13,6 +13,15 @@ type Participant = {
   remaining_moves: number;
 };
 
+type Trap = {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  visibility_mode: "hidden" | "public" | "selective";
+  is_triggered: boolean;
+};
+
 type GameState = {
   game: {
     code: string;
@@ -22,6 +31,7 @@ type GameState = {
     status: "setup" | "active" | "finished";
   };
   walls: { x: number; y: number }[];
+  traps: Trap[];
   participants: Participant[];
   activeParticipantId: string | null;
 };
@@ -49,17 +59,23 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
 
   async function loadState() {
     if (!gameCode) return;
-    const res = await fetch(`/api/games/${gameCode}/state`);
+    const query = participantId
+        ? `?participantId=${encodeURIComponent(participantId)}`
+        : "";
+
+        const res = await fetch(`/api/games/${gameCode}/state${query}`);
     const data = await res.json();
     if (res.ok) setState(data);
   }
 
   useEffect(() => {
     if (!gameCode) return;
+
     void loadState();
     const id = window.setInterval(() => void loadState(), 3000);
+
     return () => window.clearInterval(id);
-  }, [gameCode]);
+  }, [gameCode, participantId]);
 
   const me = useMemo(() => {
     return state?.participants.find((p) => p.id === participantId) ?? null;
@@ -90,15 +106,23 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     if (!participantId) return;
 
     const res = await fetch(`/api/games/${gameCode}/move`, {
-      method: "POST",
-      headers: {
+        method: "POST",
+        headers: {
         "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ participantId, toX, toY }),
+        },
+        body: JSON.stringify({ participantId, toX, toY }),
     });
 
     const data = await res.json();
-    setMessage(res.ok ? "" : data.error || "Could not move.");
+
+    if (!res.ok) {
+        setMessage(data.error || "Could not move.");
+    } else if (data.triggeredTrap) {
+        setMessage(`Trap triggered: ${data.triggeredTrap.label}`);
+    } else {
+        setMessage("");
+    }
+
     await loadState();
   }
 
@@ -145,6 +169,10 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
 
   const currentState = state;
   const currentMe = me;
+
+  function getTrapAtCell(x: number, y: number) {
+    return currentState.traps.find((trap) => trap.x === x && trap.y === y) ?? null;
+  }
 
   const isMyTurn = currentState.activeParticipantId === currentMe.id;
 
@@ -223,6 +251,7 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
                     isMyTurn &&
                     !wall &&
                     adjacentTargets.some((cell) => cell.x === x && cell.y === y);
+                const trap = visible ? getTrapAtCell(x, y) : null;
 
                 return (
                     <button
@@ -231,19 +260,23 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
                     disabled={!canMoveHere}
                     className={`aspect-square rounded-md border text-xs font-bold ${
                         !visible
-                        ? "bg-stone-900 border-stone-950 text-transparent"
-                        : wall
-                        ? "bg-stone-700 border-stone-900 text-stone-100"
-                        : occupant?.id === me.id
-                        ? "bg-blue-300 border-blue-700"
-                        : occupant
-                        ? "bg-stone-300 border-stone-600"
-                        : canMoveHere
-                        ? "bg-emerald-100 border-emerald-500 hover:bg-emerald-200"
-                        : "bg-amber-50 border-stone-300"
+                            ? "bg-stone-900 border-stone-950 text-transparent"
+                            : wall
+                            ? "bg-stone-700 border-stone-900 text-stone-100"
+                            : occupant?.id === currentMe.id
+                            ? "bg-blue-300 border-blue-700"
+                            : occupant
+                            ? "bg-stone-300 border-stone-600"
+                            : trap
+                            ? trap.is_triggered
+                            ? "bg-red-300 border-red-700 text-red-900"
+                            : "bg-amber-200 border-amber-700 text-amber-900"
+                            : canMoveHere
+                            ? "bg-emerald-100 border-emerald-500 hover:bg-emerald-200"
+                            : "bg-amber-50 border-stone-300"
                     }`}
                     >
-                    {!visible ? "" : wall ? "■" : occupant?.id === me.id ? "ME" : occupant ? occupant.name.slice(0, 2).toUpperCase() : ""}
+                    {!visible ? "" : wall ? "■" : occupant?.id === me.id ? "ME" : occupant ? occupant.name.slice(0, 2).toUpperCase() : trap ? "!" : ""}
                     </button>
                 );
             })}

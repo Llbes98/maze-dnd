@@ -11,6 +11,11 @@ type Participant = {
   turn_order: number | null;
 };
 
+type Trap = {
+  id: string;
+  label: string;
+};
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ gameCode: string }> }
@@ -23,10 +28,10 @@ export async function POST(
     const toY = Number(body.toY);
 
     const { data: game, error: gameError } = await supabaseAdmin
-        .from("games")
-        .select("id, width, height, status, current_turn_index, map_data")
-        .eq("code", gameCode)
-        .maybeSingle();
+      .from("games")
+      .select("id, width, height, status, current_turn_index, map_data")
+      .eq("code", gameCode)
+      .maybeSingle();
 
     if (gameError || !game) {
       return NextResponse.json({ error: "Game not found." }, { status: 404 });
@@ -75,9 +80,9 @@ export async function POST(
     }
 
     const walls = normalizeWalls(game.map_data?.walls);
-    
+
     if (isWall(toX, toY, walls)) {
-    return NextResponse.json({ error: "That square is blocked by a wall." }, { status: 400 });
+      return NextResponse.json({ error: "That square is blocked by a wall." }, { status: 400 });
     }
 
     const { data: occupied } = await supabaseAdmin
@@ -105,7 +110,25 @@ export async function POST(
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true });
+    const { data: trap } = await supabaseAdmin
+      .from("traps")
+      .select("id, label")
+      .eq("game_id", game.id)
+      .eq("x", toX)
+      .eq("y", toY)
+      .maybeSingle();
+
+    if (trap) {
+      await supabaseAdmin
+        .from("traps")
+        .update({ is_triggered: true })
+        .eq("id", trap.id);
+    }
+
+    return NextResponse.json({
+      ok: true,
+      triggeredTrap: trap ? ({ id: trap.id, label: trap.label } as Trap) : null,
+    });
   } catch {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
   }

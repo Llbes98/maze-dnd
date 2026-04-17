@@ -12,23 +12,36 @@ type Participant = {
   remaining_moves: number;
 };
 
+type Trap = {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  visibility_mode: "hidden" | "public" | "selective";
+  visible_to_participant_ids: string[];
+  is_triggered: boolean;
+};
+
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ gameCode: string }> }
 ) {
   try {
     const { gameCode } = await params;
+    const { searchParams } = new URL(request.url);
+    const viewer = searchParams.get("viewer");
+    const participantId = searchParams.get("participantId");
 
     const { data: game, error: gameError } = await supabaseAdmin
-        .from("games")
-        .select("id, code, name, width, height, move_points_per_turn, status, current_turn_index, map_data")
-        .eq("code", gameCode)
-        .maybeSingle();
+      .from("games")
+      .select("id, code, name, width, height, move_points_per_turn, status, current_turn_index, map_data")
+      .eq("code", gameCode)
+      .maybeSingle();
 
     if (gameError || !game) {
       return NextResponse.json({ error: "Game not found." }, { status: 404 });
     }
-    
+
     const { data: participants, error: participantsError } = await supabaseAdmin
       .from("participants")
       .select("id, name, kind, x, y, turn_order, remaining_moves")
@@ -40,20 +53,43 @@ export async function GET(
       return NextResponse.json({ error: participantsError.message }, { status: 500 });
     }
 
+    const { data: traps, error: trapsError } = await supabaseAdmin
+      .from("traps")
+      .select("id, x, y, label, visibility_mode, visible_to_participant_ids, is_triggered")
+      .eq("game_id", game.id)
+      .order("created_at", { ascending: true });
+
+    if (trapsError) {
+      return NextResponse.json({ error: trapsError.message }, { status: 500 });
+    }
+
     const ordered = (participants ?? []) as Participant[];
     const activeParticipant =
       ordered.filter((p) => p.turn_order !== null)[game.current_turn_index] ?? null;
 
     const walls = normalizeWalls(game.map_data?.walls);
+    const allTraps = (traps ?? []) as Trap[];
+
+    const visibleTraps =
+      viewer === "gm"
+        ? allTraps
+        : allTraps.filter((trap) => {
+            if (trap.is_triggered) return true;
+            if (trap.visibility_mode === "public") return true;
+            if (trap.visibility_mode === "selective" && participantId) {
+              return trap.visible_to_participant_ids.includes(participantId);
+            }
+            return false;
+          });
 
     return NextResponse.json({
-        game,
-        walls,
-        participants: ordered,
-        activeParticipantId: activeParticipant?.id ?? null,
+      game,
+      walls,
+      traps: visibleTraps,
+      participants: ordered,
+      activeParticipantId: activeParticipant?.id ?? null,
     });
   } catch {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
   }
-
 }
