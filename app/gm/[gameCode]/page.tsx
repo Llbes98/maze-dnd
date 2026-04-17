@@ -30,6 +30,8 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
   const [state, setState] = useState<GameState | null>(null);
   const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [turnOrderDirty, setTurnOrderDirty] = useState(false);
+  
 
   useEffect(() => {
     params.then((p) => setGameCode(p.gameCode));
@@ -47,11 +49,15 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
   }
 
   useEffect(() => {
-    if (!gameCode) return;
-    void loadState();
-    const id = window.setInterval(() => void loadState(), 3000);
-    return () => window.clearInterval(id);
-  }, [gameCode]);
+  if (!gameCode) return;
+
+  void loadState();
+
+  if (turnOrderDirty) return;
+
+  const id = window.setInterval(() => void loadState(), 3000);
+  return () => window.clearInterval(id);
+  }, [gameCode, turnOrderDirty]);
 
   const orderedParticipants = useMemo(() => {
     return [...(state?.participants ?? [])].sort((a, b) => {
@@ -82,23 +88,30 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
     await loadState();
   }
 
-  async function saveTurnOrder() {
-    if (!gameCode || !state) return;
+ async function saveTurnOrder() {
+  if (!gameCode || !state) return;
 
-    const ids = orderedParticipants.map((p) => p.id);
+  const ids = orderedParticipants.map((p) => p.id);
 
-    const res = await fetch(`/api/games/${gameCode}/turn-order`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ orderedParticipantIds: ids }),
-    });
+  const res = await fetch(`/api/games/${gameCode}/turn-order`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ orderedParticipantIds: ids }),
+  });
 
-    const data = await res.json();
-    setMessage(res.ok ? "Turn order saved." : data.error || "Could not save turn order.");
-    await loadState();
+  const data = await res.json();
+
+  if (res.ok) {
+    setMessage("Turn order saved.");
+    setTurnOrderDirty(false);
+  } else {
+    setMessage(data.error || "Could not save turn order.");
   }
+
+  await loadState();
+}
 
   async function startGame() {
     if (!gameCode) return;
@@ -111,18 +124,32 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
   }
 
   function moveParticipantUp(index: number) {
-    if (!state || index === 0) return;
-    const copy = [...orderedParticipants];
-    [copy[index - 1], copy[index]] = [copy[index], copy[index - 1]];
-    setState({ ...state, participants: copy.map((p, i) => ({ ...p, turn_order: i })) });
-  }
+  if (!state || index === 0) return;
+
+  const copy = [...orderedParticipants];
+  [copy[index - 1], copy[index]] = [copy[index], copy[index - 1]];
+
+  setState({
+    ...state,
+    participants: copy.map((p, i) => ({ ...p, turn_order: i })),
+  });
+
+  setTurnOrderDirty(true);
+}
 
   function moveParticipantDown(index: number) {
-    if (!state || index >= orderedParticipants.length - 1) return;
-    const copy = [...orderedParticipants];
-    [copy[index], copy[index + 1]] = [copy[index + 1], copy[index]];
-    setState({ ...state, participants: copy.map((p, i) => ({ ...p, turn_order: i })) });
-  }
+  if (!state || index >= orderedParticipants.length - 1) return;
+
+  const copy = [...orderedParticipants];
+  [copy[index], copy[index + 1]] = [copy[index + 1], copy[index]];
+
+  setState({
+    ...state,
+    participants: copy.map((p, i) => ({ ...p, turn_order: i })),
+  });
+
+  setTurnOrderDirty(true);
+}
 
   if (!state) {
     return <main className="min-h-screen p-8">Loading...</main>;
