@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { cellKey, getVisibleCellKeys } from "@/lib/maze-visibility";
 
+const PLAYER_VIEW_SIZE = 10;
+const PLAYER_CENTER_OFFSET = Math.floor(PLAYER_VIEW_SIZE / 2);
+
 type Participant = {
   id: string;
   name: string;
@@ -20,6 +23,11 @@ type Trap = {
   label: string;
   visibility_mode: "hidden" | "public" | "selective";
   is_triggered: boolean;
+};
+
+type TriggeredTrap = {
+  id: string;
+  label: string;
 };
 
 type GameState = {
@@ -48,6 +56,8 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
   const [name, setName] = useState("");
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [pendingTrap, setPendingTrap] = useState<TriggeredTrap | null>(null);
+  const [trapDecisionPending, setTrapDecisionPending] = useState(false);
 
   useEffect(() => {
     params.then((p) => setGameCode(p.gameCode));
@@ -120,11 +130,43 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     if (!res.ok) {
         setMessage(data.error || "Could not move.");
     } else if (data.triggeredTrap) {
-        setMessage(`Trap triggered: ${data.triggeredTrap.label}`);
+        setPendingTrap(data.triggeredTrap);
+        setMessage("");
     } else {
         setMessage("");
     }
 
+    await loadState();
+  }
+
+  async function revealTrap(outcome: "success" | "fail") {
+    if (!participantId || !pendingTrap) return;
+
+    setTrapDecisionPending(true);
+
+    const res = await fetch(`/api/games/${gameCode}/reveal-trap`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        participantId,
+        trapId: pendingTrap.id,
+        outcome,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      setMessage(data.error || "Could not reveal trap.");
+      setTrapDecisionPending(false);
+      return;
+    }
+
+    setPendingTrap(null);
+    setTrapDecisionPending(false);
+    setMessage("");
     await loadState();
   }
 
@@ -210,6 +252,23 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     return currentState.walls.some((wall) => wall.x === x && wall.y === y);
   }
 
+  const viewportCells =
+    currentMe.x === null || currentMe.y === null
+      ? []
+      : Array.from({ length: PLAYER_VIEW_SIZE * PLAYER_VIEW_SIZE }).map((_, index) => {
+          const viewX = index % PLAYER_VIEW_SIZE;
+          const viewY = Math.floor(index / PLAYER_VIEW_SIZE);
+          const x = currentMe.x! + viewX - PLAYER_CENTER_OFFSET;
+          const y = currentMe.y! + viewY - PLAYER_CENTER_OFFSET;
+          const inBounds =
+            x >= 0 &&
+            y >= 0 &&
+            x < currentState.game.width &&
+            y < currentState.game.height;
+
+          return { viewX, viewY, x, y, inBounds };
+        });
+
   return (
     <main className="min-h-screen bg-amber-50 text-stone-900 p-8">
       <div className="mx-auto max-w-6xl grid gap-6 lg:grid-cols-[280px_1fr]">
@@ -243,33 +302,31 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
           <div
             className="grid gap-1"
             style={{
-              gridTemplateColumns: `repeat(${currentState.game.width}, minmax(0, 1fr))`,
+              gridTemplateColumns: `repeat(${PLAYER_VIEW_SIZE}, minmax(0, 1fr))`,
             }}
           >
-            {Array.from({ length: currentState.game.width * currentState.game.height }).map((_, index) => {
-                const x = index % currentState.game.width;
-                const y = Math.floor(index / currentState.game.width);
-                const key = cellKey(x, y);
-                const visible = visibleCells.has(key);
-                const occupant = visible ? currentState.participants.find((p) => p.x === x && p.y === y) : null;
-                const wall = visible && isWallCell(x, y);
+            {viewportCells.map((cell) => {
+                const key = cellKey(cell.x, cell.y);
+                const visible = cell.inBounds && visibleCells.has(key);
+                const occupant = visible ? currentState.participants.find((p) => p.x === cell.x && p.y === cell.y) : null;
+                const wall = !cell.inBounds || (visible && isWallCell(cell.x, cell.y));
                 const canMoveHere =
                     visible &&
                     isMyTurn &&
                     !wall &&
-                    adjacentTargets.some((cell) => cell.x === x && cell.y === y);
-                const trap = visible ? getTrapAtCell(x, y) : null;
+                    adjacentTargets.some((target) => target.x === cell.x && target.y === cell.y);
+                const trap = visible ? getTrapAtCell(cell.x, cell.y) : null;
 
                 return (
                     <button
-                    key={`${x}-${y}`}
-                    onClick={() => canMoveHere && move(x, y)}
+                    key={`${cell.viewX}-${cell.viewY}`}
+                    onClick={() => canMoveHere && move(cell.x, cell.y)}
                     disabled={!canMoveHere}
                     className={`aspect-square rounded-md border text-xs font-bold ${
-                        !visible
-                            ? "bg-stone-900 border-stone-950 text-transparent"
-                            : wall
-                            ? "bg-stone-700 border-stone-900 text-stone-100"
+                        wall
+                            ? "bg-stone-700 border-stone-800 text-transparent"
+                            : !visible
+                            ? "bg-stone-200 border-stone-300 text-transparent"
                             : occupant?.id === currentMe.id
                             ? "bg-blue-300 border-blue-700"
                             : occupant
@@ -283,13 +340,39 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
                             : "bg-amber-50 border-stone-300"
                     }`}
                     >
-                    {!visible ? "" : wall ? "■" : occupant?.id === me.id ? "ME" : occupant ? occupant.name.slice(0, 2).toUpperCase() : trap ? "!" : ""}
+                    {!visible || wall ? "" : occupant?.id === me.id ? "ME" : occupant ? occupant.name.slice(0, 2).toUpperCase() : trap ? "!" : ""}
                     </button>
                 );
             })}
           </div>
         </section>
       </div>
+
+      {pendingTrap && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-xl border-4 border-stone-800 bg-white p-6 text-center shadow-xl">
+            <h2 className="text-2xl font-bold mb-2">make a save, ask DM</h2>
+            <p className="mb-6 text-stone-700">{pendingTrap.label}</p>
+
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => void revealTrap("success")}
+                disabled={trapDecisionPending}
+                className="rounded-lg bg-emerald-700 px-5 py-3 font-bold text-white disabled:opacity-40"
+              >
+                Success
+              </button>
+              <button
+                onClick={() => void revealTrap("fail")}
+                disabled={trapDecisionPending}
+                className="rounded-lg bg-red-700 px-5 py-3 font-bold text-white disabled:opacity-40"
+              >
+                Fail
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

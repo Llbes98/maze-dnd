@@ -14,6 +14,9 @@ type Participant = {
 type Trap = {
   id: string;
   label: string;
+  visibility_mode: "hidden" | "public" | "selective";
+  visible_to_participant_ids: string[] | null;
+  is_triggered: boolean;
 };
 
 export async function POST(
@@ -112,22 +115,23 @@ export async function POST(
 
     const { data: trap } = await supabaseAdmin
       .from("traps")
-      .select("id, label")
+      .select("id, label, visibility_mode, visible_to_participant_ids, is_triggered")
       .eq("game_id", game.id)
       .eq("x", toX)
       .eq("y", toY)
       .maybeSingle();
 
-    if (trap) {
-      await supabaseAdmin
-        .from("traps")
-        .update({ is_triggered: true })
-        .eq("id", trap.id);
-    }
+    const trapAlreadyVisible =
+      trap &&
+      (trap.is_triggered ||
+        trap.visibility_mode === "public" ||
+        (trap.visibility_mode === "selective" &&
+          (trap.visible_to_participant_ids ?? []).includes(participantId)));
 
     return NextResponse.json({
       ok: true,
-      triggeredTrap: trap ? ({ id: trap.id, label: trap.label } as Trap) : null,
+      triggeredTrap:
+        trap && !trapAlreadyVisible ? { id: trap.id, label: trap.label } : null,
     });
   } catch {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
