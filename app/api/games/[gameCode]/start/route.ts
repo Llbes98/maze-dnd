@@ -22,6 +22,7 @@ export async function POST(
       .from("participants")
       .select("id, turn_order")
       .eq("game_id", game.id)
+      .eq("kind", "player")
       .order("turn_order", { ascending: true });
 
     if (participantsError || !participants || participants.length === 0) {
@@ -35,6 +36,7 @@ export async function POST(
       .update({
         status: "active",
         current_turn_index: 0,
+        is_npc_turn: false,
       })
       .eq("id", game.id);
 

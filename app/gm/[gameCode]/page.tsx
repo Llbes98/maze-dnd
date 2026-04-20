@@ -29,12 +29,16 @@ type GameState = {
     height: number;
     status: "setup" | "active" | "finished";
     move_points_per_turn: number;
-  };
+    is_npc_turn: boolean;
+};
   walls: { x: number; y: number }[];
   traps: Trap[];
   participants: Participant[];
   activeParticipantId: string | null;
+  activeTurnKind: ActiveTurnKind;
 };
+
+type ActiveTurnKind = "player" | "npc";
 
 export default function GMPage({ params }: { params: Promise<{ gameCode: string }> }) {
   const [gameCode, setGameCode] = useState("");
@@ -45,6 +49,7 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
   const [editMode, setEditMode] = useState<"assign" | "walls" | "traps">("assign");
   const [trapLabel, setTrapLabel] = useState("Trap");
   const [trapVisibilityMode, setTrapVisibilityMode] = useState<"hidden" | "public">("hidden");
+  const [npcName, setNpcName] = useState("NPC 1");
   
   function isWallCell(x: number, y: number) {
     return state?.walls.some((wall) => wall.x === x && wall.y === y) ?? false;
@@ -196,6 +201,69 @@ async function toggleTrap(x: number, y: number) {
     await loadState();
   }
 
+  async function addNpc() {
+  if (!gameCode) return;
+
+  const res = await fetch(`/api/games/${gameCode}/add-npc`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name: npcName }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    setMessage(data.error || "Could not add NPC.");
+    return;
+  }
+
+  setMessage("NPC added.");
+  setNpcName(`NPC ${Math.floor(Math.random() * 100)}`);
+  await loadState();
+}
+
+async function moveNpc(participantId: string, toX: number, toY: number) {
+  if (!gameCode) return;
+
+  const res = await fetch(`/api/games/${gameCode}/move-npc`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ participantId, toX, toY }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    setMessage(data.error || "Could not move NPC.");
+    return;
+  }
+
+  setMessage("NPC moved.");
+  await loadState();
+}
+
+async function endNpcTurn() {
+  if (!gameCode) return;
+
+  const res = await fetch(`/api/games/${gameCode}/end-npc-turn`, {
+    method: "POST",
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    setMessage(data.error || "Could not end NPC turn.");
+    return;
+  }
+
+  setMessage("NPC turn ended.");
+  await loadState();
+}
+
   function moveParticipantUp(index: number) {
   if (!state || index === 0) return;
 
@@ -253,7 +321,10 @@ async function toggleTrap(x: number, y: number) {
                   className="w-full text-left"
                   onClick={() => setSelectedParticipantId(participant.id)}
                 >
-                  <div className="font-semibold">{participant.name}</div>
+                  <div className="font-semibold">
+                    {participant.name}{" "}
+                    <span className="text-xs text-stone-500 uppercase">({participant.kind})</span>
+                  </div>
                   <div className="text-sm text-stone-600">
                     {participant.x === null ? "No position" : `(${participant.x}, ${participant.y})`}
                   </div>
@@ -358,6 +429,45 @@ async function toggleTrap(x: number, y: number) {
             </div>
         )}
 
+        <div className="mt-6 rounded-2xl border border-stone-300 bg-white p-4">
+          <h3 className="text-lg font-bold mb-3">NPCs</h3>
+
+          <div className="flex gap-3 mb-4">
+            <input
+              value={npcName}
+              onChange={(e) => setNpcName(e.target.value)}
+              className="flex-1 rounded-xl border border-stone-400 bg-white px-4 py-2"
+              placeholder="NPC name"
+            />
+            <button
+              onClick={addNpc}
+              className="rounded-xl bg-stone-800 px-4 py-2 text-white"
+            >
+              Add NPC
+            </button>
+          </div>
+
+          <p className="text-sm text-stone-700">
+            You can add up to 4 NPCs. They share one GM-controlled turn at the end of each round.
+          </p>
+        </div>
+
+        {state.game.is_npc_turn && (
+          <div className="mt-6 rounded-2xl border border-emerald-400 bg-emerald-50 p-4">
+            <h3 className="text-lg font-bold mb-2">NPC turn active</h3>
+            <p className="text-sm text-stone-700 mb-4">
+              Move any NPCs you want. When finished, end the NPC turn.
+            </p>
+
+            <button
+              onClick={endNpcTurn}
+              className="rounded-xl bg-emerald-700 px-4 py-3 text-white"
+            >
+              End NPC turn
+            </button>
+          </div>
+        )}
+
           {message && <p className="mt-4 text-sm text-stone-700">{message}</p>}
         </aside>
 
@@ -377,17 +487,32 @@ async function toggleTrap(x: number, y: number) {
                 const isActive = occupant?.id === state.activeParticipantId;
                 const trap = getTrapAtCell(x, y);
 
+                const selectedParticipant = state.participants.find(
+                  (p) => p.id === selectedParticipantId
+                );
+
+                const canMoveSelectedNpc =
+                  state.game.is_npc_turn &&
+                  selectedParticipant?.kind === "npc" &&
+                  selectedParticipant.x !== null &&
+                  selectedParticipant.y !== null &&
+                  Math.abs(selectedParticipant.x - x) + Math.abs(selectedParticipant.y - y) === 1 &&
+                  !wall &&
+                  !occupant;
+
                 return (
                     <button
                         key={`${x}-${y}`}
                         onClick={() => {
-                            if (editMode === "walls") {
+                          if (state.game.is_npc_turn && selectedParticipant?.kind === "npc" && canMoveSelectedNpc) {
+                            void moveNpc(selectedParticipant.id, x, y);
+                          } else if (editMode === "walls") {
                             void toggleWall(x, y);
-                            } else if (editMode === "traps") {
+                          } else if (editMode === "traps") {
                             void toggleTrap(x, y);
-                            } else {
+                          } else {
                             void assignPosition(x, y);
-                            }
+                          }
                         }}
                         className={`aspect-square rounded-md border text-xs font-bold ${
                             wall

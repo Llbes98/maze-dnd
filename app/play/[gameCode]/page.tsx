@@ -29,11 +29,13 @@ type GameState = {
     width: number;
     height: number;
     status: "setup" | "active" | "finished";
+    is_npc_turn: boolean;
   };
   walls: { x: number; y: number }[];
   traps: Trap[];
   participants: Participant[];
   activeParticipantId: string | null;
+  activeTurnKind: "player" | "npc";
 };
 
 function getStorageKey(gameCode: string) {
@@ -174,7 +176,8 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     return currentState.traps.find((trap) => trap.x === x && trap.y === y) ?? null;
   }
 
-  const isMyTurn = currentState.activeParticipantId === currentMe.id;
+  const isMyTurn =
+  !state.game.is_npc_turn && state.activeParticipantId === me.id;
 
   const adjacentTargets =
     currentMe.x === null || currentMe.y === null
@@ -217,7 +220,11 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
             {me.x === null ? "Waiting for GM position..." : `Position: (${me.x}, ${me.y})`}
           </p>
           <p className="text-stone-700 mb-4">
-            {isMyTurn ? `Your turn • moves left: ${me.remaining_moves}` : "Waiting for your turn"}
+            {state.game.is_npc_turn
+              ? "The GM is taking the shared NPC turn."
+              : isMyTurn
+              ? `Your turn • moves left: ${me.remaining_moves}`
+              : "Waiting for your turn"}
           </p>
 
           <button

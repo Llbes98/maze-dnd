@@ -34,7 +34,7 @@ export async function GET(
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
-      .select("id, code, name, width, height, move_points_per_turn, status, current_turn_index, map_data")
+      .select("id, code, name, width, height, move_points_per_turn, status, current_turn_index, is_npc_turn, map_data")
       .eq("code", gameCode)
       .maybeSingle();
 
@@ -64,8 +64,12 @@ export async function GET(
     }
 
     const ordered = (participants ?? []) as Participant[];
+    const orderedPlayers = ordered.filter(
+      (p) => p.kind === "player" && p.turn_order !== null
+    );
+
     const activeParticipant =
-      ordered.filter((p) => p.turn_order !== null)[game.current_turn_index] ?? null;
+      game.is_npc_turn ? null : orderedPlayers[game.current_turn_index] ?? null;
 
     const walls = normalizeWalls(game.map_data?.walls);
     const allTraps = (traps ?? []) as Trap[];
@@ -88,6 +92,7 @@ export async function GET(
       traps: visibleTraps,
       participants: ordered,
       activeParticipantId: activeParticipant?.id ?? null,
+      activeTurnKind: game.is_npc_turn ? "npc" : "player",
     });
   } catch {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
