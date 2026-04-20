@@ -242,6 +242,81 @@ async function toggleTrap(x: number, y: number) {
     await loadState();
   }
 
+  async function copyMazeLayout() {
+    if (!state) return;
+
+    const layout = {
+      mazeLayoutVersion: 1,
+      sourceGameCode: state.game.code,
+      name: state.game.name,
+      width: state.game.width,
+      height: state.game.height,
+      walls: state.walls,
+      goals: state.goals,
+      traps: state.traps.map((trap) => ({
+        x: trap.x,
+        y: trap.y,
+        label: trap.label,
+        visibilityMode: trap.visibility_mode === "public" ? "public" : "hidden",
+      })),
+    };
+    const text = JSON.stringify(layout, null, 2);
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage("Maze layout copied.");
+    } catch {
+      window.prompt("Copy maze layout", text);
+      setMessage("Maze layout ready to copy.");
+    }
+  }
+
+  async function pasteMazeLayout() {
+    if (!gameCode) return;
+
+    let text = "";
+
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      text = window.prompt("Paste maze layout JSON") ?? "";
+    }
+
+    if (!text.trim()) {
+      setMessage("No maze layout pasted.");
+      return;
+    }
+
+    let layout: unknown;
+
+    try {
+      layout = JSON.parse(text);
+    } catch {
+      setMessage("That maze layout is not valid JSON.");
+      return;
+    }
+
+    const res = await fetch(`/api/games/${gameCode}/apply-layout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ layout }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      setMessage(data.error || "Could not paste maze layout.");
+      return;
+    }
+
+    setSelectedParticipantId(null);
+    setTurnOrderDirty(false);
+    setMessage("Maze layout pasted.");
+    await loadState();
+  }
+
   async function addNpc() {
   if (!gameCode) return;
 
@@ -395,6 +470,12 @@ async function endNpcTurn() {
             </button>
             <button onClick={startGame} className="rounded-xl bg-emerald-700 px-4 py-3 text-white">
               Start game
+            </button>
+            <button onClick={copyMazeLayout} className="rounded-xl bg-stone-700 px-4 py-3 text-white">
+              Copy maze layout
+            </button>
+            <button onClick={pasteMazeLayout} className="rounded-xl bg-stone-700 px-4 py-3 text-white">
+              Paste maze layout
             </button>
           </div>
 
