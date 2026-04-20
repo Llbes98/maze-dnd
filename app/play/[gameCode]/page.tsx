@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { cellKey, getVisibleCellKeys } from "@/lib/maze-visibility";
+import {
+  cellKey,
+  getVisibleCellKeys,
+  isWallBetween,
+  wallKey,
+  type WallDirection,
+} from "@/lib/maze-visibility";
 
 const PLAYER_VIEW_SIZE = 10;
 const PLAYER_CENTER_OFFSET = Math.floor(PLAYER_VIEW_SIZE / 2);
@@ -30,6 +36,12 @@ type TriggeredTrap = {
   label: string;
 };
 
+type Wall = {
+  x: number;
+  y: number;
+  direction: WallDirection;
+};
+
 type GameState = {
   game: {
     code: string;
@@ -39,7 +51,7 @@ type GameState = {
     status: "setup" | "active" | "finished";
     is_npc_turn: boolean;
   };
-  walls: { x: number; y: number }[];
+  walls: Wall[];
   traps: Trap[];
   participants: Participant[];
   activeParticipantId: string | null;
@@ -58,15 +70,23 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
   const [message, setMessage] = useState("");
   const [pendingTrap, setPendingTrap] = useState<TriggeredTrap | null>(null);
   const [trapDecisionPending, setTrapDecisionPending] = useState(false);
+  const [solvedMaze, setSolvedMaze] = useState(false);
 
   useEffect(() => {
-    params.then((p) => setGameCode(p.gameCode));
+    params.then((p) => {
+      setGameCode(p.gameCode);
+      setState(null);
+      setParticipantId(null);
+      setPendingTrap(null);
+      setSolvedMaze(false);
+      setMessage("");
+    });
   }, [params]);
 
   useEffect(() => {
     if (!gameCode) return;
     const saved = localStorage.getItem(getStorageKey(gameCode));
-    if (saved) setParticipantId(saved);
+    setParticipantId(saved);
   }, [gameCode]);
 
   async function loadState() {
@@ -131,8 +151,10 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
         setMessage(data.error || "Could not move.");
     } else if (data.triggeredTrap) {
         setPendingTrap(data.triggeredTrap);
+        setSolvedMaze(Boolean(data.reachedGoal));
         setMessage("");
     } else {
+        setSolvedMaze(Boolean(data.reachedGoal));
         setMessage("");
     }
 
@@ -248,8 +270,26 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
         )
         : new Set<string>();
 
-  function isWallCell(x: number, y: number) {
-    return currentState.walls.some((wall) => wall.x === x && wall.y === y);
+  function isInBounds(x: number, y: number) {
+    return x >= 0 && y >= 0 && x < currentState.game.width && y < currentState.game.height;
+  }
+
+  function hasWall(x: number, y: number, direction: WallDirection) {
+    return currentState.walls.some((wall) => wallKey(wall) === wallKey({ x, y, direction }));
+  }
+
+  function hasWallBetween(fromX: number, fromY: number, toX: number, toY: number) {
+    return isWallBetween(fromX, fromY, toX, toY, currentState.walls);
+  }
+
+  function isVisibleCell(x: number, y: number) {
+    return isInBounds(x, y) && visibleCells.has(cellKey(x, y));
+  }
+
+  function isVisibleWallBetween(fromX: number, fromY: number, toX: number, toY: number) {
+    const visible = isVisibleCell(fromX, fromY) || isVisibleCell(toX, toY);
+    const wall = !isInBounds(fromX, fromY) || !isInBounds(toX, toY) || hasWallBetween(fromX, fromY, toX, toY);
+    return visible && wall;
   }
 
   const viewportCells =
@@ -300,26 +340,112 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
         <section className="rounded-3xl border-4 border-amber-900/20 bg-white/70 p-6">
           <h2 className="text-2xl font-bold mb-4">Maze</h2>
           <div
-            className="grid gap-1"
+            key={`${currentState.game.code}-grid-${currentMe.x}-${currentMe.y}`}
+            className="grid gap-0 rounded-md bg-stone-300"
             style={{
-              gridTemplateColumns: `repeat(${PLAYER_VIEW_SIZE}, minmax(0, 1fr))`,
+              gridTemplateColumns: Array.from({ length: PLAYER_VIEW_SIZE * 2 - 1 }, (_, index) =>
+                index % 2 === 0 ? "minmax(0, 1fr)" : "6px"
+              ).join(" "),
+              gridTemplateRows: Array.from({ length: PLAYER_VIEW_SIZE * 2 - 1 }, (_, index) =>
+                index % 2 === 0 ? "auto" : "6px"
+              ).join(" "),
             }}
           >
-            {viewportCells.map((cell) => {
-                const key = cellKey(cell.x, cell.y);
-                const visible = cell.inBounds && visibleCells.has(key);
+            {Array.from({ length: (PLAYER_VIEW_SIZE * 2 - 1) * (PLAYER_VIEW_SIZE * 2 - 1) }).map((_, index) => {
+                const gridWidth = PLAYER_VIEW_SIZE * 2 - 1;
+                const gridX = index % gridWidth;
+                const gridY = Math.floor(index / gridWidth);
+
+                if (currentMe.x === null || currentMe.y === null) return null;
+
+                if (gridX % 2 === 1 && gridY % 2 === 1) {
+                  const leftX = currentMe.x + Math.floor(gridX / 2) - PLAYER_CENTER_OFFSET;
+                  const rightX = leftX + 1;
+                  const topY = currentMe.y + Math.floor(gridY / 2) - PLAYER_CENTER_OFFSET;
+                  const bottomY = topY + 1;
+                  const connectedWall =
+                    isVisibleWallBetween(leftX, topY, rightX, topY) ||
+                    isVisibleWallBetween(leftX, bottomY, rightX, bottomY) ||
+                    isVisibleWallBetween(leftX, topY, leftX, bottomY) ||
+                    isVisibleWallBetween(rightX, topY, rightX, bottomY);
+                  const visible =
+                    isVisibleCell(leftX, topY) ||
+                    isVisibleCell(rightX, topY) ||
+                    isVisibleCell(leftX, bottomY) ||
+                    isVisibleCell(rightX, bottomY);
+
+                  return (
+                    <div
+                      key={`${currentState.game.code}-corner-${gridX}-${gridY}`}
+                      className={connectedWall ? "bg-stone-700" : visible ? "bg-amber-50" : "bg-stone-200"}
+                    />
+                  );
+                }
+
+                if (gridX % 2 === 1) {
+                  const leftX = currentMe.x + Math.floor(gridX / 2) - PLAYER_CENTER_OFFSET;
+                  const rightX = leftX + 1;
+                  const y = currentMe.y + gridY / 2 - PLAYER_CENTER_OFFSET;
+                  const leftInBounds = isInBounds(leftX, y);
+                  const rightInBounds = isInBounds(rightX, y);
+                  const visible = isVisibleCell(leftX, y) || isVisibleCell(rightX, y);
+                  const wall = !leftInBounds || !rightInBounds || hasWall(leftX, y, "right");
+
+                  return (
+                    <div
+                      key={`${currentState.game.code}-wall-right-${leftX}-${y}`}
+                      className={`h-full w-full ${
+                        wall && visible
+                          ? "bg-stone-700"
+                          : !visible
+                          ? "bg-stone-200"
+                          : "bg-amber-50"
+                      }`}
+                    />
+                  );
+                }
+
+                if (gridY % 2 === 1) {
+                  const x = currentMe.x + gridX / 2 - PLAYER_CENTER_OFFSET;
+                  const topY = currentMe.y + Math.floor(gridY / 2) - PLAYER_CENTER_OFFSET;
+                  const bottomY = topY + 1;
+                  const topInBounds = isInBounds(x, topY);
+                  const bottomInBounds = isInBounds(x, bottomY);
+                  const visible = isVisibleCell(x, topY) || isVisibleCell(x, bottomY);
+                  const wall = !topInBounds || !bottomInBounds || hasWall(x, topY, "down");
+
+                  return (
+                    <div
+                      key={`${currentState.game.code}-wall-down-${x}-${topY}`}
+                      className={`h-full w-full ${
+                        wall && visible
+                          ? "bg-stone-700"
+                          : !visible
+                          ? "bg-stone-200"
+                          : "bg-amber-50"
+                      }`}
+                    />
+                  );
+                }
+
+                const viewX = gridX / 2;
+                const viewY = gridY / 2;
+                const cell = viewportCells[viewY * PLAYER_VIEW_SIZE + viewX];
+                const visible = cell.inBounds && visibleCells.has(cellKey(cell.x, cell.y));
                 const occupant = visible ? currentState.participants.find((p) => p.x === cell.x && p.y === cell.y) : null;
-                const wall = !cell.inBounds || (visible && isWallCell(cell.x, cell.y));
+                const wall = !cell.inBounds;
                 const canMoveHere =
                     visible &&
                     isMyTurn &&
-                    !wall &&
-                    adjacentTargets.some((target) => target.x === cell.x && target.y === cell.y);
+                    adjacentTargets.some((target) => target.x === cell.x && target.y === cell.y) &&
+                    currentMe.x !== null &&
+                    currentMe.y !== null &&
+                    !hasWallBetween(currentMe.x, currentMe.y, cell.x, cell.y);
                 const trap = visible ? getTrapAtCell(cell.x, cell.y) : null;
 
                 return (
                     <button
-                    key={`${cell.viewX}-${cell.viewY}`}
+                    key={`${currentState.game.code}-cell-${cell.viewX}-${cell.viewY}`}
                     onClick={() => canMoveHere && move(cell.x, cell.y)}
                     disabled={!canMoveHere}
                     className={`aspect-square rounded-md border text-xs font-bold ${
@@ -370,6 +496,21 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
                 Fail
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {solvedMaze && !pendingTrap && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-xl border-4 border-lime-800 bg-white p-6 text-center shadow-xl">
+            <h2 className="text-2xl font-bold mb-6">You solved the maze!</h2>
+
+            <button
+              onClick={() => setSolvedMaze(false)}
+              className="rounded-lg bg-lime-700 px-5 py-3 font-bold text-white"
+            >
+              OK
+            </button>
           </div>
         </div>
       )}

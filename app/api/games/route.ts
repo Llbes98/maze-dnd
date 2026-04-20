@@ -37,6 +37,7 @@ export async function POST(request: Request) {
           width,
           height,
           move_points_per_turn: movePointsPerTurn,
+          map_data: { walls: [], goals: [] },
         })
         .select("code")
         .single();
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
     width,
     height,
     move_points_per_turn: movePointsPerTurn,
-    map_data: { walls: [] },
+    map_data: { walls: [], goals: [] },
   })
   .select("code")
   .single();

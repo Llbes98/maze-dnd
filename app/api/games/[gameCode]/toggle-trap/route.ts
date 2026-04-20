@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { normalizeWalls } from "@/lib/maze-visibility";
 
 export async function POST(
   request: Request,
@@ -18,7 +17,7 @@ export async function POST(
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
-      .select("id, width, height, map_data")
+      .select("id, width, height")
       .eq("code", gameCode)
       .maybeSingle();
 
@@ -28,13 +27,6 @@ export async function POST(
 
     if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= game.width || y >= game.height) {
       return NextResponse.json({ error: "Trap position is out of bounds." }, { status: 400 });
-    }
-
-    const walls = normalizeWalls(game.map_data?.walls);
-    const blocked = walls.some((wall) => wall.x === x && wall.y === y);
-
-    if (blocked) {
-      return NextResponse.json({ error: "Cannot place a trap on a wall." }, { status: 400 });
     }
 
     const { data: existingTrap } = await supabaseAdmin

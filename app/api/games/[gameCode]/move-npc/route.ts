@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { isAdjacent } from "@/lib/game-utils";
-import { isWall, normalizeWalls } from "@/lib/maze-visibility";
+import { isWallBetween, normalizeWalls } from "@/lib/maze-visibility";
 
 export async function POST(
   request: Request,
@@ -64,8 +64,8 @@ export async function POST(
 
     const walls = normalizeWalls(game.map_data?.walls);
 
-    if (isWall(toX, toY, walls)) {
-      return NextResponse.json({ error: "That square is blocked by a wall." }, { status: 400 });
+    if (isWallBetween(npc.x, npc.y, toX, toY, walls)) {
+      return NextResponse.json({ error: "A wall blocks that path." }, { status: 400 });
     }
 
     const { data: occupied } = await supabaseAdmin

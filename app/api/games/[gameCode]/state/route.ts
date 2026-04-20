@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { normalizeWalls } from "@/lib/maze-visibility";
+import { normalizeCells, normalizeWalls } from "@/lib/maze-visibility";
 
 type Participant = {
   id: string;
@@ -72,6 +72,7 @@ export async function GET(
       game.is_npc_turn ? null : orderedPlayers[game.current_turn_index] ?? null;
 
     const walls = normalizeWalls(game.map_data?.walls);
+    const goals = normalizeCells(game.map_data?.goals);
     const allTraps = (traps ?? []) as Trap[];
 
     const visibleTraps =
@@ -89,6 +90,7 @@ export async function GET(
     return NextResponse.json({
       game,
       walls,
+      goals: viewer === "gm" ? goals : [],
       traps: visibleTraps,
       participants: ordered,
       activeParticipantId: activeParticipant?.id ?? null,

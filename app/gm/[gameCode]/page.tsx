@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { isWallBetween, wallKey, type Cell, type WallDirection } from "@/lib/maze-visibility";
 
 type Participant = {
   id: string;
@@ -21,6 +22,12 @@ type Trap = {
   is_triggered: boolean;
 };
 
+type Wall = {
+  x: number;
+  y: number;
+  direction: WallDirection;
+};
+
 type GameState = {
   game: {
     code: string;
@@ -31,7 +38,8 @@ type GameState = {
     move_points_per_turn: number;
     is_npc_turn: boolean;
 };
-  walls: { x: number; y: number }[];
+  walls: Wall[];
+  goals: Cell[];
   traps: Trap[];
   participants: Participant[];
   activeParticipantId: string | null;
@@ -46,21 +54,48 @@ export default function GMPage({ params }: { params: Promise<{ gameCode: string 
   const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [turnOrderDirty, setTurnOrderDirty] = useState(false);
-  const [editMode, setEditMode] = useState<"assign" | "walls" | "traps">("assign");
+  const [editMode, setEditMode] = useState<"assign" | "walls" | "traps" | "goals">("assign");
   const [trapLabel, setTrapLabel] = useState("Trap");
   const [trapVisibilityMode, setTrapVisibilityMode] = useState<"hidden" | "public">("hidden");
   const [npcName, setNpcName] = useState("NPC 1");
   
-  function isWallCell(x: number, y: number) {
-    return state?.walls.some((wall) => wall.x === x && wall.y === y) ?? false;
+  function hasWall(x: number, y: number, direction: WallDirection) {
+    if (!state) return false;
+    return state.walls.some((wall) => wallKey(wall) === wallKey({ x, y, direction }));
 }
 
-function isTrapCell(x: number, y: number) {
-  return state?.traps.some((trap) => trap.x === x && trap.y === y) ?? false;
+function hasWallBetween(fromX: number, fromY: number, toX: number, toY: number) {
+  return state ? isWallBetween(fromX, fromY, toX, toY, state.walls) : false;
 }
 
 function getTrapAtCell(x: number, y: number) {
   return state?.traps.find((trap) => trap.x === x && trap.y === y) ?? null;
+}
+
+function isGoalCell(x: number, y: number) {
+  return state?.goals.some((goal) => goal.x === x && goal.y === y) ?? false;
+}
+
+async function toggleGoal(x: number, y: number) {
+  if (!gameCode) return;
+
+  const res = await fetch(`/api/games/${gameCode}/toggle-goal`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ x, y }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    setMessage(data.error || "Could not toggle goal.");
+    return;
+  }
+
+  setMessage("Goal updated.");
+  await loadState();
 }
 
 async function toggleTrap(x: number, y: number) {
@@ -90,7 +125,7 @@ async function toggleTrap(x: number, y: number) {
   await loadState();
 }
 
-    async function toggleWall(x: number, y: number) {
+    async function toggleWall(x: number, y: number, direction: WallDirection) {
         if (!gameCode) return;
 
         const res = await fetch(`/api/games/${gameCode}/toggle-wall`, {
@@ -98,7 +133,7 @@ async function toggleTrap(x: number, y: number) {
             headers: {
             "Content-Type": "application/json",
             },
-            body: JSON.stringify({ x, y }),
+            body: JSON.stringify({ x, y, direction }),
         });
 
         const data = await res.json();
@@ -109,10 +144,16 @@ async function toggleTrap(x: number, y: number) {
 
         setMessage("Wall updated.");
         await loadState();
-    }
+  }
 
   useEffect(() => {
-    params.then((p) => setGameCode(p.gameCode));
+    params.then((p) => {
+      setGameCode(p.gameCode);
+      setState(null);
+      setSelectedParticipantId(null);
+      setTurnOrderDirty(false);
+      setMessage("");
+    });
   }, [params]);
 
   async function loadState() {
@@ -310,7 +351,7 @@ async function endNpcTurn() {
           <div className="space-y-3">
             {orderedParticipants.map((participant, index) => (
               <div
-                key={participant.id}
+                key={`${state.game.code}-participant-${participant.id}`}
                 className={`rounded-2xl border p-3 ${
                   selectedParticipantId === participant.id
                     ? "border-stone-900 bg-amber-100"
@@ -385,6 +426,15 @@ async function endNpcTurn() {
                 >
                 Edit traps
                 </button>
+
+                <button
+                onClick={() => setEditMode("goals")}
+                className={`rounded-xl px-4 py-2 ${
+                    editMode === "goals" ? "bg-stone-800 text-white" : "bg-stone-200"
+                }`}
+                >
+                Edit goals
+                </button>
             </div>
 
             <p className="mt-3 text-sm text-stone-700">
@@ -394,6 +444,8 @@ async function endNpcTurn() {
                     ? "Assign positions"
                     : editMode === "walls"
                     ? "Edit walls"
+                    : editMode === "goals"
+                    ? "Edit goals"
                     : "Edit traps"}
                 </span>
             </p>
@@ -425,6 +477,24 @@ async function endNpcTurn() {
 
                 <p className="mt-3 text-sm text-stone-600">
                 Click a square on the grid to place or remove a trap.
+                </p>
+            </div>
+        )}
+
+        {editMode === "walls" && (
+            <div className="mt-4 rounded-2xl border border-stone-300 bg-white p-4">
+                <h3 className="text-lg font-bold mb-2">Wall settings</h3>
+                <p className="text-sm text-stone-600">
+                Click the thin lanes between squares to place or remove walls.
+                </p>
+            </div>
+        )}
+
+        {editMode === "goals" && (
+            <div className="mt-4 rounded-2xl border border-stone-300 bg-white p-4">
+                <h3 className="text-lg font-bold mb-2">Goal settings</h3>
+                <p className="text-sm text-stone-600">
+                Click a square on the grid to mark or remove a maze goal.
                 </p>
             </div>
         )}
@@ -474,18 +544,89 @@ async function endNpcTurn() {
         <section className="rounded-3xl border-4 border-amber-900/20 bg-white/70 p-6">
           <h2 className="text-2xl font-bold mb-4">Grid</h2>
           <div
-            className="grid gap-1"
+            key={`${state.game.code}-grid-${state.game.width}-${state.game.height}`}
+            className="grid gap-0 rounded-md bg-stone-300"
             style={{
-              gridTemplateColumns: `repeat(${state.game.width}, minmax(0, 1fr))`,
+              gridTemplateColumns: Array.from({ length: state.game.width * 2 - 1 }, (_, index) =>
+                index % 2 === 0 ? "minmax(0, 1fr)" : "8px"
+              ).join(" "),
+              gridTemplateRows: Array.from({ length: state.game.height * 2 - 1 }, (_, index) =>
+                index % 2 === 0 ? "auto" : "8px"
+              ).join(" "),
             }}
           >
-            {Array.from({ length: state.game.width * state.game.height }).map((_, index) => {
-                const x = index % state.game.width;
-                const y = Math.floor(index / state.game.width);
+            {Array.from({ length: (state.game.width * 2 - 1) * (state.game.height * 2 - 1) }).map((_, index) => {
+                const gridWidth = state.game.width * 2 - 1;
+                const gridX = index % gridWidth;
+                const gridY = Math.floor(index / gridWidth);
+
+                if (gridX % 2 === 1 && gridY % 2 === 1) {
+                  const x = Math.floor(gridX / 2);
+                  const y = Math.floor(gridY / 2);
+                  const connectedWall =
+                    hasWall(x, y, "right") ||
+                    hasWall(x, y + 1, "right") ||
+                    hasWall(x, y, "down") ||
+                    hasWall(x + 1, y, "down");
+
+                  return (
+                    <div
+                      key={`${state.game.code}-corner-${gridX}-${gridY}`}
+                      className={connectedWall ? "bg-stone-700" : "bg-amber-50"}
+                    />
+                  );
+                }
+
+                if (gridX % 2 === 1) {
+                  const x = Math.floor(gridX / 2);
+                  const y = gridY / 2;
+                  const wall = hasWall(x, y, "right");
+
+                  return (
+                    <button
+                      key={`${state.game.code}-wall-right-${x}-${y}`}
+                      onClick={() => editMode === "walls" && void toggleWall(x, y, "right")}
+                      disabled={editMode !== "walls"}
+                      className={`h-full w-full ${
+                        wall
+                          ? "bg-stone-700"
+                          : editMode === "walls"
+                          ? "bg-stone-200 hover:bg-stone-400"
+                          : "bg-amber-50"
+                      }`}
+                      title={`Wall between ${x},${y} and ${x + 1},${y}`}
+                    />
+                  );
+                }
+
+                if (gridY % 2 === 1) {
+                  const x = gridX / 2;
+                  const y = Math.floor(gridY / 2);
+                  const wall = hasWall(x, y, "down");
+
+                  return (
+                    <button
+                      key={`${state.game.code}-wall-down-${x}-${y}`}
+                      onClick={() => editMode === "walls" && void toggleWall(x, y, "down")}
+                      disabled={editMode !== "walls"}
+                      className={`h-full w-full ${
+                        wall
+                          ? "bg-stone-700"
+                          : editMode === "walls"
+                          ? "bg-stone-200 hover:bg-stone-400"
+                          : "bg-amber-50"
+                      }`}
+                      title={`Wall between ${x},${y} and ${x},${y + 1}`}
+                    />
+                  );
+                }
+
+                const x = gridX / 2;
+                const y = gridY / 2;
                 const occupant = state.participants.find((p) => p.x === x && p.y === y);
-                const wall = isWallCell(x, y);
                 const isActive = occupant?.id === state.activeParticipantId;
                 const trap = getTrapAtCell(x, y);
+                const goal = isGoalCell(x, y);
 
                 const selectedParticipant = state.participants.find(
                   (p) => p.id === selectedParticipantId
@@ -497,27 +638,27 @@ async function endNpcTurn() {
                   selectedParticipant.x !== null &&
                   selectedParticipant.y !== null &&
                   Math.abs(selectedParticipant.x - x) + Math.abs(selectedParticipant.y - y) === 1 &&
-                  !wall &&
+                  !hasWallBetween(selectedParticipant.x, selectedParticipant.y, x, y) &&
                   !occupant;
 
                 return (
                     <button
-                        key={`${x}-${y}`}
+                        key={`${state.game.code}-cell-${x}-${y}`}
                         onClick={() => {
                           if (state.game.is_npc_turn && selectedParticipant?.kind === "npc" && canMoveSelectedNpc) {
                             void moveNpc(selectedParticipant.id, x, y);
                           } else if (editMode === "walls") {
-                            void toggleWall(x, y);
+                            return;
                           } else if (editMode === "traps") {
                             void toggleTrap(x, y);
+                          } else if (editMode === "goals") {
+                            void toggleGoal(x, y);
                           } else {
                             void assignPosition(x, y);
                           }
                         }}
                         className={`aspect-square rounded-md border text-xs font-bold ${
-                            wall
-                            ? "bg-stone-700 border-stone-900 text-stone-100"
-                            : occupant
+                            occupant
                             ? isActive
                                 ? "bg-emerald-300 border-emerald-700"
                                 : "bg-stone-300 border-stone-600"
@@ -527,16 +668,18 @@ async function endNpcTurn() {
                                 : trap.visibility_mode === "public"
                                 ? "bg-amber-200 border-amber-700 text-amber-900"
                                 : "bg-rose-100 border-rose-500 text-rose-800"
+                            : goal
+                            ? "bg-lime-200 border-lime-700 text-lime-900"
                             : "bg-amber-50 border-stone-300 hover:bg-amber-100"
                         }`}
                         title={`${x},${y}`}
                         >
-                        {wall
-                            ? "■"
-                            : occupant
+                        {occupant
                             ? occupant.name.slice(0, 2).toUpperCase()
                             : trap
                             ? "!"
+                            : goal
+                            ? "GO"
                             : ""}
                     </button>
                 );

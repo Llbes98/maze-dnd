@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { isAdjacent } from "@/lib/game-utils";
-import { isWall, normalizeWalls } from "@/lib/maze-visibility";
+import { normalizeCells, isWallBetween, normalizeWalls } from "@/lib/maze-visibility";
 
 type Participant = {
   id: string;
@@ -9,14 +9,6 @@ type Participant = {
   y: number | null;
   remaining_moves: number;
   turn_order: number | null;
-};
-
-type Trap = {
-  id: string;
-  label: string;
-  visibility_mode: "hidden" | "public" | "selective";
-  visible_to_participant_ids: string[] | null;
-  is_triggered: boolean;
 };
 
 export async function POST(
@@ -84,8 +76,8 @@ export async function POST(
 
     const walls = normalizeWalls(game.map_data?.walls);
 
-    if (isWall(toX, toY, walls)) {
-      return NextResponse.json({ error: "That square is blocked by a wall." }, { status: 400 });
+    if (isWallBetween(activeParticipant.x, activeParticipant.y, toX, toY, walls)) {
+      return NextResponse.json({ error: "A wall blocks that path." }, { status: 400 });
     }
 
     const { data: occupied } = await supabaseAdmin
@@ -127,9 +119,12 @@ export async function POST(
         trap.visibility_mode === "public" ||
         (trap.visibility_mode === "selective" &&
           (trap.visible_to_participant_ids ?? []).includes(participantId)));
+    const goals = normalizeCells(game.map_data?.goals);
+    const reachedGoal = goals.some((goal) => goal.x === toX && goal.y === toY);
 
     return NextResponse.json({
       ok: true,
+      reachedGoal,
       triggeredTrap:
         trap && !trapAlreadyVisible ? { id: trap.id, label: trap.label } : null,
     });

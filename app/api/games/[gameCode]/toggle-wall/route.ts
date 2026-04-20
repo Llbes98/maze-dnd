@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { cellKey, normalizeWalls } from "@/lib/maze-visibility";
+import { normalizeWalls, type WallDirection, wallKey } from "@/lib/maze-visibility";
 
 export async function POST(
   request: Request,
@@ -11,6 +11,7 @@ export async function POST(
     const body = await request.json();
     const x = Number(body.x);
     const y = Number(body.y);
+    const direction = body.direction as WallDirection;
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
@@ -22,29 +23,28 @@ export async function POST(
       return NextResponse.json({ error: "Game not found." }, { status: 404 });
     }
 
-    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= game.width || y >= game.height) {
+    const validDirection = direction === "right" || direction === "down";
+    const inBounds =
+      validDirection &&
+      Number.isInteger(x) &&
+      Number.isInteger(y) &&
+      x >= 0 &&
+      y >= 0 &&
+      ((direction === "right" && x < game.width - 1 && y < game.height) ||
+        (direction === "down" && x < game.width && y < game.height - 1));
+
+    if (!inBounds) {
       return NextResponse.json({ error: "Wall position is out of bounds." }, { status: 400 });
     }
 
-    const { data: occupied } = await supabaseAdmin
-      .from("participants")
-      .select("id")
-      .eq("game_id", game.id)
-      .eq("x", x)
-      .eq("y", y)
-      .maybeSingle();
-
-    if (occupied) {
-      return NextResponse.json({ error: "Cannot place a wall on an occupied square." }, { status: 400 });
-    }
-
     const walls = normalizeWalls(game.map_data?.walls);
-    const targetKey = cellKey(x, y);
-    const exists = walls.some((wall) => cellKey(wall.x, wall.y) === targetKey);
+    const targetWall = { x, y, direction };
+    const targetKey = wallKey(targetWall);
+    const exists = walls.some((wall) => wallKey(wall) === targetKey);
 
     const nextWalls = exists
-      ? walls.filter((wall) => cellKey(wall.x, wall.y) !== targetKey)
-      : [...walls, { x, y }];
+      ? walls.filter((wall) => wallKey(wall) !== targetKey)
+      : [...walls, targetWall];
 
     const { error } = await supabaseAdmin
       .from("games")
