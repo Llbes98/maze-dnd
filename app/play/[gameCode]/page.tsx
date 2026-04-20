@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   cellKey,
   getVisibleCellKeys,
@@ -20,6 +20,9 @@ type Participant = {
   y: number | null;
   turn_order: number | null;
   remaining_moves: number;
+  color?: PlayerColor;
+  move_points_per_turn?: number;
+  has_ended_turn?: boolean;
 };
 
 type Trap = {
@@ -58,6 +61,46 @@ type GameState = {
   activeTurnKind: "player" | "npc";
 };
 
+type PlayerColor =
+  | "red"
+  | "dark-green"
+  | "light-green"
+  | "dark-blue"
+  | "light-blue"
+  | "purple"
+  | "yellow"
+  | "orange";
+
+const PLAYER_COLOR_OPTIONS: { value: PlayerColor; label: string; className: string }[] = [
+  { value: "red", label: "Red", className: "bg-red-500" },
+  { value: "dark-green", label: "Dark green", className: "bg-green-800" },
+  { value: "light-green", label: "Light green", className: "bg-lime-300" },
+  { value: "dark-blue", label: "Dark blue", className: "bg-blue-800" },
+  { value: "light-blue", label: "Light blue", className: "bg-sky-300" },
+  { value: "purple", label: "Purple", className: "bg-purple-500" },
+  { value: "yellow", label: "Yellow", className: "bg-yellow-300" },
+  { value: "orange", label: "Orange", className: "bg-orange-400" },
+];
+
+const PARTICIPANT_COLOR_CLASSES: Record<PlayerColor, string> = {
+  red: "bg-red-500 border-red-800 text-white",
+  "dark-green": "bg-green-800 border-green-950 text-white",
+  "light-green": "bg-lime-300 border-lime-700 text-lime-950",
+  "dark-blue": "bg-blue-800 border-blue-950 text-white",
+  "light-blue": "bg-sky-300 border-sky-700 text-sky-950",
+  purple: "bg-purple-500 border-purple-800 text-white",
+  yellow: "bg-yellow-300 border-yellow-700 text-yellow-950",
+  orange: "bg-orange-400 border-orange-700 text-orange-950",
+};
+
+function normalizePlayerColor(color: string | undefined): PlayerColor {
+  return PLAYER_COLOR_OPTIONS.some((option) => option.value === color) ? (color as PlayerColor) : "red";
+}
+
+function participantCellClass(participant: Participant) {
+  return PARTICIPANT_COLOR_CLASSES[normalizePlayerColor(participant.color)];
+}
+
 function getStorageKey(gameCode: string) {
   return `maze-player-id:${gameCode}`;
 }
@@ -66,6 +109,7 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
   const [gameCode, setGameCode] = useState("");
   const [state, setState] = useState<GameState | null>(null);
   const [name, setName] = useState("");
+  const [color, setColor] = useState<PlayerColor>("red");
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [pendingTrap, setPendingTrap] = useState<TriggeredTrap | null>(null);
@@ -76,38 +120,35 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     params.then((p) => {
       setGameCode(p.gameCode);
       setState(null);
-      setParticipantId(null);
+      setParticipantId(localStorage.getItem(getStorageKey(p.gameCode)));
       setPendingTrap(null);
       setSolvedMaze(false);
       setMessage("");
     });
   }, [params]);
 
-  useEffect(() => {
+  const loadState = useCallback(async (viewerParticipantId = participantId) => {
     if (!gameCode) return;
-    const saved = localStorage.getItem(getStorageKey(gameCode));
-    setParticipantId(saved);
-  }, [gameCode]);
-
-  async function loadState() {
-    if (!gameCode) return;
-    const query = participantId
-        ? `?participantId=${encodeURIComponent(participantId)}`
+    const query = viewerParticipantId
+        ? `?participantId=${encodeURIComponent(viewerParticipantId)}`
         : "";
 
         const res = await fetch(`/api/games/${gameCode}/state${query}`);
     const data = await res.json();
     if (res.ok) setState(data);
-  }
+  }, [gameCode, participantId]);
 
   useEffect(() => {
     if (!gameCode) return;
 
-    void loadState();
+    const firstLoadId = window.setTimeout(() => void loadState(), 0);
     const id = window.setInterval(() => void loadState(), 3000);
 
-    return () => window.clearInterval(id);
-  }, [gameCode, participantId]);
+    return () => {
+      window.clearTimeout(firstLoadId);
+      window.clearInterval(id);
+    };
+  }, [gameCode, loadState]);
 
   const me = useMemo(() => {
     return state?.participants.find((p) => p.id === participantId) ?? null;
@@ -119,7 +160,7 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, color }),
     });
 
     const data = await res.json();
@@ -131,7 +172,7 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     localStorage.setItem(getStorageKey(gameCode), data.id);
     setParticipantId(data.id);
     setMessage("");
-    await loadState();
+    await loadState(data.id);
   }
 
   async function move(toX: number, toY: number) {
@@ -220,6 +261,24 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
             placeholder="Your character name"
             className="w-full rounded-xl border border-stone-400 bg-white px-4 py-3 mb-4"
           />
+          <div className="mb-4">
+            <p className="mb-2 text-sm font-semibold text-stone-700">Choose your color</p>
+            <div className="grid grid-cols-2 gap-2">
+              {PLAYER_COLOR_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setColor(option.value)}
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm ${
+                    color === option.value ? "border-stone-900 bg-stone-100" : "border-stone-300 bg-white"
+                  }`}
+                >
+                  <span className={`h-5 w-5 rounded-full border border-stone-500 ${option.className}`} />
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <button onClick={joinGame} className="rounded-xl bg-stone-800 px-5 py-3 text-white">
             Join
           </button>
@@ -240,8 +299,8 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
     return currentState.traps.find((trap) => trap.x === x && trap.y === y) ?? null;
   }
 
-  const isMyTurn =
-  !state.game.is_npc_turn && state.activeParticipantId === me.id;
+  const canAct =
+  state.game.status === "active" && !state.game.is_npc_turn && !me.has_ended_turn;
 
   const adjacentTargets =
     currentMe.x === null || currentMe.y === null
@@ -321,14 +380,18 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
           <p className="text-stone-700 mb-4">
             {state.game.is_npc_turn
               ? "The GM is taking the shared NPC turn."
-              : isMyTurn
-              ? `Your turn • moves left: ${me.remaining_moves}`
-              : "Waiting for your turn"}
+              : canAct && me.remaining_moves > 0
+              ? `Player turn - moves left: ${me.remaining_moves}`
+              : canAct
+              ? "No moves left - end your turn"
+              : me.has_ended_turn
+              ? "Waiting for the other players to end their turns"
+              : "Waiting for the player turn"}
           </p>
 
           <button
             onClick={endTurn}
-            disabled={!isMyTurn}
+            disabled={!canAct}
             className="rounded-xl bg-stone-800 px-5 py-3 text-white disabled:opacity-40"
           >
             End turn
@@ -436,7 +499,8 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
                 const wall = !cell.inBounds;
                 const canMoveHere =
                     visible &&
-                    isMyTurn &&
+                    canAct &&
+                    currentMe.remaining_moves > 0 &&
                     adjacentTargets.some((target) => target.x === cell.x && target.y === cell.y) &&
                     currentMe.x !== null &&
                     currentMe.y !== null &&
@@ -454,9 +518,9 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
                             : !visible
                             ? "bg-stone-200 border-stone-300 text-transparent"
                             : occupant?.id === currentMe.id
-                            ? "bg-blue-300 border-blue-700"
+                            ? participantCellClass(occupant)
                             : occupant
-                            ? "bg-stone-300 border-stone-600"
+                            ? participantCellClass(occupant)
                             : trap
                             ? trap.is_triggered
                             ? "bg-red-300 border-red-700 text-red-900"
@@ -466,7 +530,7 @@ export default function PlayerPage({ params }: { params: Promise<{ gameCode: str
                             : "bg-amber-50 border-stone-300"
                     }`}
                     >
-                    {!visible || wall ? "" : occupant?.id === me.id ? "ME" : occupant ? occupant.name.slice(0, 2).toUpperCase() : trap ? "!" : ""}
+                    {!visible || wall ? "" : occupant ? occupant.name.slice(0, 1).toUpperCase() : ""}
                     </button>
                 );
             })}

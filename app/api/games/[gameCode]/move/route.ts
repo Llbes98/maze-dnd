@@ -2,14 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { isAdjacent } from "@/lib/game-utils";
 import { normalizeCells, isWallBetween, normalizeWalls } from "@/lib/maze-visibility";
-
-type Participant = {
-  id: string;
-  x: number | null;
-  y: number | null;
-  remaining_moves: number;
-  turn_order: number | null;
-};
+import { normalizeStringList } from "@/lib/turn-state";
 
 export async function POST(
   request: Request,
@@ -24,7 +17,7 @@ export async function POST(
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
-      .select("id, width, height, status, current_turn_index, map_data")
+      .select("id, width, height, status, is_npc_turn, map_data")
       .eq("code", gameCode)
       .maybeSingle();
 
@@ -36,21 +29,26 @@ export async function POST(
       return NextResponse.json({ error: "Game is not active." }, { status: 400 });
     }
 
-    const { data: participants, error: participantsError } = await supabaseAdmin
-      .from("participants")
-      .select("id, x, y, remaining_moves, turn_order")
-      .eq("game_id", game.id)
-      .order("turn_order", { ascending: true });
-
-    if (participantsError || !participants) {
-      return NextResponse.json({ error: "Could not load participants." }, { status: 500 });
+    if (game.is_npc_turn) {
+      return NextResponse.json({ error: "It is the NPC turn." }, { status: 400 });
     }
 
-    const ordered = participants.filter((p) => p.turn_order !== null) as Participant[];
-    const activeParticipant = ordered[game.current_turn_index];
+    const endedParticipantIds = normalizeStringList(game.map_data?.endedParticipantIds);
 
-    if (!activeParticipant || activeParticipant.id !== participantId) {
-      return NextResponse.json({ error: "It is not your turn." }, { status: 400 });
+    if (endedParticipantIds.includes(participantId)) {
+      return NextResponse.json({ error: "You have ended your turn." }, { status: 400 });
+    }
+
+    const { data: activeParticipant, error: participantError } = await supabaseAdmin
+      .from("participants")
+      .select("id, kind, x, y, remaining_moves")
+      .eq("game_id", game.id)
+      .eq("id", participantId)
+      .eq("kind", "player")
+      .maybeSingle();
+
+    if (participantError || !activeParticipant) {
+      return NextResponse.json({ error: "Player not found." }, { status: 404 });
     }
 
     if (

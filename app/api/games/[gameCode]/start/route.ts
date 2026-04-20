@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { getParticipantMovePoints, normalizeMovePointMap } from "@/lib/turn-state";
 
 export async function POST(
   _request: Request,
@@ -10,7 +11,7 @@ export async function POST(
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
-      .select("id, move_points_per_turn")
+      .select("id, move_points_per_turn, map_data")
       .eq("code", gameCode)
       .maybeSingle();
 
@@ -20,16 +21,16 @@ export async function POST(
 
     const { data: participants, error: participantsError } = await supabaseAdmin
       .from("participants")
-      .select("id, turn_order")
+      .select("id")
       .eq("game_id", game.id)
       .eq("kind", "player")
-      .order("turn_order", { ascending: true });
+      .order("created_at", { ascending: true });
 
     if (participantsError || !participants || participants.length === 0) {
-      return NextResponse.json({ error: "Set a turn order first." }, { status: 400 });
+      return NextResponse.json({ error: "Add at least one player first." }, { status: 400 });
     }
 
-    const activeParticipant = participants[0];
+    const participantMovePoints = normalizeMovePointMap(game.map_data?.participantMovePoints);
 
     const { error: gameUpdateError } = await supabaseAdmin
       .from("games")
@@ -37,6 +38,10 @@ export async function POST(
         status: "active",
         current_turn_index: 0,
         is_npc_turn: false,
+        map_data: {
+          ...(game.map_data ?? {}),
+          endedParticipantIds: [],
+        },
       })
       .eq("id", game.id);
 
@@ -53,13 +58,21 @@ export async function POST(
       return NextResponse.json({ error: resetMovesError.message }, { status: 500 });
     }
 
-    const { error: setFirstError } = await supabaseAdmin
-      .from("participants")
-      .update({ remaining_moves: game.move_points_per_turn })
-      .eq("id", activeParticipant.id);
+    for (const participant of participants) {
+      const { error: setMovesError } = await supabaseAdmin
+        .from("participants")
+        .update({
+          remaining_moves: getParticipantMovePoints(
+            participant.id,
+            game.move_points_per_turn,
+            participantMovePoints
+          ),
+        })
+        .eq("id", participant.id);
 
-    if (setFirstError) {
-      return NextResponse.json({ error: setFirstError.message }, { status: 500 });
+      if (setMovesError) {
+        return NextResponse.json({ error: setMovesError.message }, { status: 500 });
+      }
     }
 
     return NextResponse.json({ ok: true });

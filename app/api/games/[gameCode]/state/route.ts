@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { normalizeCells, normalizeWalls } from "@/lib/maze-visibility";
+import { getParticipantMovePoints, normalizeMovePointMap, normalizeStringList } from "@/lib/turn-state";
 
 type Participant = {
   id: string;
@@ -10,6 +11,9 @@ type Participant = {
   y: number | null;
   turn_order: number | null;
   remaining_moves: number;
+  color?: string;
+  move_points_per_turn?: number;
+  has_ended_turn?: boolean;
 };
 
 type Trap = {
@@ -63,13 +67,20 @@ export async function GET(
       return NextResponse.json({ error: trapsError.message }, { status: 500 });
     }
 
-    const ordered = (participants ?? []) as Participant[];
-    const orderedPlayers = ordered.filter(
-      (p) => p.kind === "player" && p.turn_order !== null
-    );
-
-    const activeParticipant =
-      game.is_npc_turn ? null : orderedPlayers[game.current_turn_index] ?? null;
+    const participantColors =
+      (game.map_data?.participantColors as Record<string, string> | undefined) ?? {};
+    const participantMovePoints = normalizeMovePointMap(game.map_data?.participantMovePoints);
+    const endedParticipantIds = normalizeStringList(game.map_data?.endedParticipantIds);
+    const ordered = ((participants ?? []) as Participant[]).map((participant) => ({
+      ...participant,
+      color: participantColors[participant.id] ?? (participant.kind === "npc" ? "orange" : "red"),
+      move_points_per_turn: getParticipantMovePoints(
+        participant.id,
+        game.move_points_per_turn,
+        participantMovePoints
+      ),
+      has_ended_turn: endedParticipantIds.includes(participant.id),
+    }));
 
     const walls = normalizeWalls(game.map_data?.walls);
     const goals = normalizeCells(game.map_data?.goals);
@@ -93,7 +104,8 @@ export async function GET(
       goals: viewer === "gm" ? goals : [],
       traps: visibleTraps,
       participants: ordered,
-      activeParticipantId: activeParticipant?.id ?? null,
+      activeParticipantId: null,
+      endedParticipantIds,
       activeTurnKind: game.is_npc_turn ? "npc" : "player",
     });
   } catch {

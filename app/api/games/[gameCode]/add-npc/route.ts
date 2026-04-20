@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 
+const NPC_COLORS = ["orange", "purple", "dark-green", "dark-blue"] as const;
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ gameCode: string }> }
@@ -16,7 +18,7 @@ export async function POST(
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
-      .select("id")
+      .select("id, map_data")
       .eq("code", gameCode)
       .maybeSingle();
 
@@ -51,6 +53,19 @@ export async function POST(
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
+
+    await supabaseAdmin
+      .from("games")
+      .update({
+        map_data: {
+          ...(game.map_data ?? {}),
+          participantColors: {
+            ...((game.map_data?.participantColors as Record<string, string> | undefined) ?? {}),
+            [data.id]: NPC_COLORS[(existingNpcs ?? []).length % NPC_COLORS.length],
+          },
+        },
+      })
+      .eq("id", game.id);
 
     return NextResponse.json(data);
   } catch {

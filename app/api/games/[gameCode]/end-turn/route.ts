@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { normalizeStringList } from "@/lib/turn-state";
 
 type Player = {
   id: string;
-  turn_order: number | null;
 };
 
 export async function POST(
@@ -17,7 +17,7 @@ export async function POST(
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
-      .select("id, status, current_turn_index, move_points_per_turn, is_npc_turn")
+      .select("id, status, is_npc_turn, map_data")
       .eq("code", gameCode)
       .maybeSingle();
 
@@ -25,27 +25,41 @@ export async function POST(
       return NextResponse.json({ error: "Game not found." }, { status: 404 });
     }
 
+    if (game.status !== "active") {
+      return NextResponse.json({ error: "Game is not active." }, { status: 400 });
+    }
+
     if (game.is_npc_turn) {
       return NextResponse.json({ error: "It is the NPC turn." }, { status: 400 });
     }
 
-    const { data: players, error: playersError } = await supabaseAdmin
+    const { data: participant, error: participantError } = await supabaseAdmin
       .from("participants")
-      .select("id, turn_order")
+      .select("id, kind")
+      .eq("id", participantId)
       .eq("game_id", game.id)
       .eq("kind", "player")
-      .order("turn_order", { ascending: true });
+      .maybeSingle();
+
+    if (participantError || !participant) {
+      return NextResponse.json({ error: "Player not found." }, { status: 404 });
+    }
+
+    const { data: players, error: playersError } = await supabaseAdmin
+      .from("participants")
+      .select("id")
+      .eq("game_id", game.id)
+      .eq("kind", "player");
 
     if (playersError || !players || players.length === 0) {
-      return NextResponse.json({ error: "Could not load player turn order." }, { status: 500 });
+      return NextResponse.json({ error: "Could not load players." }, { status: 500 });
     }
 
-    const ordered = (players as Player[]).filter((p) => p.turn_order !== null);
-    const activePlayer = ordered[game.current_turn_index];
-
-    if (!activePlayer || activePlayer.id !== participantId) {
-      return NextResponse.json({ error: "It is not your turn." }, { status: 400 });
-    }
+    const endedParticipantIds = normalizeStringList(game.map_data?.endedParticipantIds);
+    const nextEndedParticipantIds = Array.from(new Set([...endedParticipantIds, participantId]));
+    const allPlayersEnded = (players as Player[]).every((player) =>
+      nextEndedParticipantIds.includes(player.id)
+    );
 
     const { error: zeroOutError } = await supabaseAdmin
       .from("participants")
@@ -56,29 +70,14 @@ export async function POST(
       return NextResponse.json({ error: zeroOutError.message }, { status: 500 });
     }
 
-    const isLastPlayer = game.current_turn_index >= ordered.length - 1;
-
-    if (isLastPlayer) {
-      const { error: gameUpdateError } = await supabaseAdmin
-        .from("games")
-        .update({ is_npc_turn: true })
-        .eq("id", game.id);
-
-      if (gameUpdateError) {
-        return NextResponse.json({ error: gameUpdateError.message }, { status: 500 });
-      }
-
-      return NextResponse.json({ ok: true, npcTurn: true });
-    }
-
-    const nextIndex = game.current_turn_index + 1;
-    const nextPlayer = ordered[nextIndex];
-
     const { error: gameUpdateError } = await supabaseAdmin
       .from("games")
       .update({
-        current_turn_index: nextIndex,
-        is_npc_turn: false,
+        is_npc_turn: allPlayersEnded,
+        map_data: {
+          ...(game.map_data ?? {}),
+          endedParticipantIds: nextEndedParticipantIds,
+        },
       })
       .eq("id", game.id);
 
@@ -86,16 +85,7 @@ export async function POST(
       return NextResponse.json({ error: gameUpdateError.message }, { status: 500 });
     }
 
-    const { error: nextMovesError } = await supabaseAdmin
-      .from("participants")
-      .update({ remaining_moves: game.move_points_per_turn })
-      .eq("id", nextPlayer.id);
-
-    if (nextMovesError) {
-      return NextResponse.json({ error: nextMovesError.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ ok: true, npcTurn: false });
+    return NextResponse.json({ ok: true, npcTurn: allPlayersEnded });
   } catch {
     return NextResponse.json({ error: "Bad request." }, { status: 400 });
   }

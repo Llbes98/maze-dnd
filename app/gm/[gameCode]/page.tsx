@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { isWallBetween, wallKey, type Cell, type WallDirection } from "@/lib/maze-visibility";
 
 type Participant = {
@@ -11,6 +11,9 @@ type Participant = {
   y: number | null;
   turn_order: number | null;
   remaining_moves: number;
+  color?: PlayerColor;
+  move_points_per_turn?: number;
+  has_ended_turn?: boolean;
 };
 
 type Trap = {
@@ -47,13 +50,44 @@ type GameState = {
 };
 
 type ActiveTurnKind = "player" | "npc";
+type PlayerColor =
+  | "red"
+  | "dark-green"
+  | "light-green"
+  | "dark-blue"
+  | "light-blue"
+  | "purple"
+  | "yellow"
+  | "orange";
+
+const PARTICIPANT_COLOR_CLASSES: Record<PlayerColor, string> = {
+  red: "bg-red-500 border-red-800 text-white",
+  "dark-green": "bg-green-800 border-green-950 text-white",
+  "light-green": "bg-lime-300 border-lime-700 text-lime-950",
+  "dark-blue": "bg-blue-800 border-blue-950 text-white",
+  "light-blue": "bg-sky-300 border-sky-700 text-sky-950",
+  purple: "bg-purple-500 border-purple-800 text-white",
+  yellow: "bg-yellow-300 border-yellow-700 text-yellow-950",
+  orange: "bg-orange-400 border-orange-700 text-orange-950",
+};
+
+function normalizePlayerColor(color: string | undefined, kind: "player" | "npc"): PlayerColor {
+  if (Object.keys(PARTICIPANT_COLOR_CLASSES).includes(color ?? "")) {
+    return color as PlayerColor;
+  }
+
+  return kind === "npc" ? "orange" : "red";
+}
+
+function participantCellClass(participant: Participant) {
+  return PARTICIPANT_COLOR_CLASSES[normalizePlayerColor(participant.color, participant.kind)];
+}
 
 export default function GMPage({ params }: { params: Promise<{ gameCode: string }> }) {
   const [gameCode, setGameCode] = useState("");
   const [state, setState] = useState<GameState | null>(null);
   const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [turnOrderDirty, setTurnOrderDirty] = useState(false);
   const [editMode, setEditMode] = useState<"assign" | "walls" | "traps" | "goals">("assign");
   const [trapLabel, setTrapLabel] = useState("Trap");
   const [trapVisibilityMode, setTrapVisibilityMode] = useState<"hidden" | "public">("hidden");
@@ -151,12 +185,11 @@ async function toggleTrap(x: number, y: number) {
       setGameCode(p.gameCode);
       setState(null);
       setSelectedParticipantId(null);
-      setTurnOrderDirty(false);
       setMessage("");
     });
   }, [params]);
 
-  async function loadState() {
+  const loadState = useCallback(async () => {
     if (!gameCode) return;
 
     const res = await fetch(`/api/games/${gameCode}/state?viewer=gm`);
@@ -165,24 +198,24 @@ async function toggleTrap(x: number, y: number) {
     if (res.ok) {
       setState(data);
     }
-  }
+  }, [gameCode]);
 
   useEffect(() => {
   if (!gameCode) return;
 
-  void loadState();
-
-  if (turnOrderDirty) return;
+  const firstLoadId = window.setTimeout(() => void loadState(), 0);
 
   const id = window.setInterval(() => void loadState(), 3000);
-  return () => window.clearInterval(id);
-  }, [gameCode, turnOrderDirty]);
+  return () => {
+    window.clearTimeout(firstLoadId);
+    window.clearInterval(id);
+  };
+  }, [gameCode, loadState]);
 
   const orderedParticipants = useMemo(() => {
     return [...(state?.participants ?? [])].sort((a, b) => {
-      const av = a.turn_order ?? 9999;
-      const bv = b.turn_order ?? 9999;
-      return av - bv;
+      if (a.kind !== b.kind) return a.kind === "player" ? -1 : 1;
+      return a.name.localeCompare(b.name);
     });
   }, [state]);
 
@@ -206,31 +239,6 @@ async function toggleTrap(x: number, y: number) {
     setMessage("Position assigned.");
     await loadState();
   }
-
- async function saveTurnOrder() {
-  if (!gameCode || !state) return;
-
-  const ids = orderedParticipants.map((p) => p.id);
-
-  const res = await fetch(`/api/games/${gameCode}/turn-order`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ orderedParticipantIds: ids }),
-  });
-
-  const data = await res.json();
-
-  if (res.ok) {
-    setMessage("Turn order saved.");
-    setTurnOrderDirty(false);
-  } else {
-    setMessage(data.error || "Could not save turn order.");
-  }
-
-  await loadState();
-}
 
   async function startGame() {
     if (!gameCode) return;
@@ -312,7 +320,6 @@ async function toggleTrap(x: number, y: number) {
     }
 
     setSelectedParticipantId(null);
-    setTurnOrderDirty(false);
     setMessage("Maze layout pasted.");
     await loadState();
   }
@@ -362,6 +369,28 @@ async function moveNpc(participantId: string, toX: number, toY: number) {
   await loadState();
 }
 
+async function updatePlayerMoves(participantId: string, moves: number) {
+  if (!gameCode) return;
+
+  const res = await fetch(`/api/games/${gameCode}/player-moves`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ participantId, moves }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    setMessage(data.error || "Could not update player moves.");
+    return;
+  }
+
+  setMessage("Player moves updated.");
+  await loadState();
+}
+
 async function endNpcTurn() {
   if (!gameCode) return;
 
@@ -380,34 +409,6 @@ async function endNpcTurn() {
   await loadState();
 }
 
-  function moveParticipantUp(index: number) {
-  if (!state || index === 0) return;
-
-  const copy = [...orderedParticipants];
-  [copy[index - 1], copy[index]] = [copy[index], copy[index - 1]];
-
-  setState({
-    ...state,
-    participants: copy.map((p, i) => ({ ...p, turn_order: i })),
-  });
-
-  setTurnOrderDirty(true);
-}
-
-  function moveParticipantDown(index: number) {
-  if (!state || index >= orderedParticipants.length - 1) return;
-
-  const copy = [...orderedParticipants];
-  [copy[index], copy[index + 1]] = [copy[index + 1], copy[index]];
-
-  setState({
-    ...state,
-    participants: copy.map((p, i) => ({ ...p, turn_order: i })),
-  });
-
-  setTurnOrderDirty(true);
-}
-
   if (!state) {
     return <main className="min-h-screen p-8">Loading...</main>;
   }
@@ -424,7 +425,7 @@ async function endNpcTurn() {
 
           <h2 className="text-xl font-bold mb-3">Participants</h2>
           <div className="space-y-3">
-            {orderedParticipants.map((participant, index) => (
+            {orderedParticipants.map((participant) => (
               <div
                 key={`${state.game.code}-participant-${participant.id}`}
                 className={`rounded-2xl border p-3 ${
@@ -444,30 +445,38 @@ async function endNpcTurn() {
                   <div className="text-sm text-stone-600">
                     {participant.x === null ? "No position" : `(${participant.x}, ${participant.y})`}
                   </div>
+                  {participant.kind === "player" && (
+                    <div className="text-sm text-stone-600">
+                      {participant.has_ended_turn
+                        ? "Ended turn"
+                        : `Moves left: ${participant.remaining_moves}`}
+                    </div>
+                  )}
                 </button>
 
-                <div className="mt-2 flex gap-2">
-                  <button
-                    onClick={() => moveParticipantUp(index)}
-                    className="rounded-lg bg-stone-200 px-2 py-1 text-sm"
-                  >
-                    ↑
-                  </button>
-                  <button
-                    onClick={() => moveParticipantDown(index)}
-                    className="rounded-lg bg-stone-200 px-2 py-1 text-sm"
-                  >
-                    ↓
-                  </button>
-                </div>
+                {participant.kind === "player" && (
+                  <label className="mt-3 block text-sm text-stone-700">
+                    Moves per turn
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      defaultValue={participant.move_points_per_turn ?? state.game.move_points_per_turn}
+                      onBlur={(event) => {
+                        const moves = Number(event.target.value);
+                        if (Number.isInteger(moves)) {
+                          void updatePlayerMoves(participant.id, moves);
+                        }
+                      }}
+                      className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2"
+                    />
+                  </label>
+                )}
               </div>
             ))}
           </div>
 
           <div className="mt-6 flex flex-col gap-3">
-            <button onClick={saveTurnOrder} className="rounded-xl bg-stone-800 px-4 py-3 text-white">
-              Save turn order
-            </button>
             <button onClick={startGame} className="rounded-xl bg-emerald-700 px-4 py-3 text-white">
               Start game
             </button>
@@ -738,29 +747,25 @@ async function endNpcTurn() {
                             void assignPosition(x, y);
                           }
                         }}
-                        className={`aspect-square rounded-md border text-xs font-bold ${
+                        className={`aspect-square rounded-md border text-[clamp(0.45rem,1.2vw,0.75rem)] font-bold leading-none ${
                             occupant
                             ? isActive
-                                ? "bg-emerald-300 border-emerald-700"
-                                : "bg-stone-300 border-stone-600"
+                                ? `${participantCellClass(occupant)} ring-2 ring-emerald-700`
+                                : participantCellClass(occupant)
                             : trap
                             ? trap.is_triggered
-                                ? "bg-red-300 border-red-700 text-red-900"
+                                ? "bg-red-300 border-red-700 text-transparent"
                                 : trap.visibility_mode === "public"
-                                ? "bg-amber-200 border-amber-700 text-amber-900"
-                                : "bg-rose-100 border-rose-500 text-rose-800"
+                                ? "bg-amber-200 border-amber-700 text-transparent"
+                                : "bg-rose-100 border-rose-500 text-transparent"
                             : goal
-                            ? "bg-lime-200 border-lime-700 text-lime-900"
+                            ? "bg-lime-200 border-lime-500 text-transparent"
                             : "bg-amber-50 border-stone-300 hover:bg-amber-100"
                         }`}
                         title={`${x},${y}`}
                         >
                         {occupant
-                            ? occupant.name.slice(0, 2).toUpperCase()
-                            : trap
-                            ? "!"
-                            : goal
-                            ? "GO"
+                            ? occupant.name.slice(0, 1).toUpperCase()
                             : ""}
                     </button>
                 );

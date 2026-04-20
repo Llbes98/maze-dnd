@@ -1,17 +1,24 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { getParticipantMovePoints, normalizeMovePointMap } from "@/lib/turn-state";
+import { normalizeMovePointMap, normalizeStringList } from "@/lib/turn-state";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ gameCode: string }> }
 ) {
   try {
     const { gameCode } = await params;
+    const body = await request.json();
+    const participantId = String(body.participantId ?? "");
+    const moves = Number(body.moves);
+
+    if (!participantId || !Number.isInteger(moves) || moves < 0 || moves > 100) {
+      return NextResponse.json({ error: "Moves must be a whole number from 0 to 100." }, { status: 400 });
+    }
 
     const { data: game, error: gameError } = await supabaseAdmin
       .from("games")
-      .select("id, move_points_per_turn, is_npc_turn, map_data")
+      .select("id, is_npc_turn, map_data")
       .eq("code", gameCode)
       .maybeSingle();
 
@@ -19,40 +26,30 @@ export async function POST(
       return NextResponse.json({ error: "Game not found." }, { status: 404 });
     }
 
-    if (!game.is_npc_turn) {
-      return NextResponse.json({ error: "It is not the NPC turn." }, { status: 400 });
-    }
-
-    const { data: players, error: playersError } = await supabaseAdmin
+    const { data: participant, error: participantError } = await supabaseAdmin
       .from("participants")
-      .select("id")
+      .select("id, kind")
+      .eq("id", participantId)
       .eq("game_id", game.id)
       .eq("kind", "player")
-      .order("created_at", { ascending: true });
+      .maybeSingle();
 
-    if (playersError || !players || players.length === 0) {
-      return NextResponse.json({ error: "No players in the game." }, { status: 400 });
+    if (participantError || !participant) {
+      return NextResponse.json({ error: "Player not found." }, { status: 404 });
     }
 
     const participantMovePoints = normalizeMovePointMap(game.map_data?.participantMovePoints);
-
-    const { error: zeroOutError } = await supabaseAdmin
-      .from("participants")
-      .update({ remaining_moves: 0 })
-      .eq("game_id", game.id);
-
-    if (zeroOutError) {
-      return NextResponse.json({ error: zeroOutError.message }, { status: 500 });
-    }
+    const nextMovePoints = {
+      ...participantMovePoints,
+      [participantId]: moves,
+    };
 
     const { error: gameUpdateError } = await supabaseAdmin
       .from("games")
       .update({
-        current_turn_index: 0,
-        is_npc_turn: false,
         map_data: {
           ...(game.map_data ?? {}),
-          endedParticipantIds: [],
+          participantMovePoints: nextMovePoints,
         },
       })
       .eq("id", game.id);
@@ -61,17 +58,13 @@ export async function POST(
       return NextResponse.json({ error: gameUpdateError.message }, { status: 500 });
     }
 
-    for (const player of players) {
+    const endedParticipantIds = normalizeStringList(game.map_data?.endedParticipantIds);
+
+    if (!game.is_npc_turn && !endedParticipantIds.includes(participantId)) {
       const { error: movesError } = await supabaseAdmin
         .from("participants")
-        .update({
-          remaining_moves: getParticipantMovePoints(
-            player.id,
-            game.move_points_per_turn,
-            participantMovePoints
-          ),
-        })
-        .eq("id", player.id);
+        .update({ remaining_moves: moves })
+        .eq("id", participantId);
 
       if (movesError) {
         return NextResponse.json({ error: movesError.message }, { status: 500 });
